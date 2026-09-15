@@ -1,0 +1,17 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+
+# OneDrive sync artefacts
+*.tmp
+~$*
+
+# Never — this project has no build step and no dependencies
+node_modules/
+package-lock.json
+dist/
+build/
