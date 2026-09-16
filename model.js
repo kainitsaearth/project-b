@@ -1,11 +1,18 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-export const ENTITY_STORES = ['beans', 'rigs', 'waters'];
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=4';
+
+// Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
+export { allowedActions, ALL_ACTIONS };
+
+// Stores loaded into memory. `sessions` has no screen until Step 8, but it is loaded
+// now because brews inside it decide whether a recipe is frozen.
+export const ENTITY_STORES = ['beans', 'rigs', 'waters', 'recipes', 'sessions'];
 
 export const WATER_TYPES = ['distilled+solution', 'brand', 'other'];
 
-export const ALL_ACTIONS = ['pour', 'swirl', 'steep', 'release', 'cut'];
+export const POUR_STYLES = ['center', 'spiral', 'pulse', 'edge'];
 
 export function uid(prefix) {
   const r = globalThis.crypto?.randomUUID
@@ -35,24 +42,45 @@ export const createBean = (o = {}) => ({ ...BEAN_DEFAULTS, ...o, id: o.id ?? uid
 export const createRig = (o = {}) => ({ ...RIG_DEFAULTS, ...o, id: o.id ?? uid('rig') });
 export const createWater = (o = {}) => ({ ...WATER_DEFAULTS, ...o, id: o.id ?? uid('water') });
 
-export const factories = { beans: createBean, rigs: createRig, waters: createWater };
+export function createRecipe(o = {}) {
+  const id = o.id ?? uid('recipe');
+  return {
+    name: '', version: 1, familyId: id, forkedFrom: null,
+    beanId: null, rigId: null, waterId: null,
+    doseG: null, targetOutputMl: null, cueLeadS: 3,
+    plan: [],
+    // derived by recipe.normalizeRecipe — never typed
+    totalWaterMl: null, targetRatio: null, targetTotalTimeS: null,
+    ...o, id,
+  };
+}
 
-const SINGULAR = { beans: 'bean', rigs: 'rig', waters: 'water' };
+export const factories = { beans: createBean, rigs: createRig, waters: createWater, recipes: createRecipe };
+
+// A new plan step with sensible defaults taken from the steps before it.
+export function createAction(action, plan = []) {
+  const last = plan[plan.length - 1];
+  const lastPour = [...plan].reverse().find(a => a.action === 'pour');
+  let atS = 0;
+  if (last) {
+    const end = last.action === 'steep' && Number.isFinite(last.durationS) ? last.atS + last.durationS : last.atS;
+    atS = Number.isFinite(end) ? end + 30 : null;
+  }
+  const base = { id: uid('step'), action, atS };
+  switch (action) {
+    case 'pour':
+      return { ...base, volumeMl: null, cumulativeMl: null,
+        tempC: lastPour?.tempC ?? 93, style: lastPour?.style ?? '', valve: 'open' };
+    case 'steep': return { ...base, durationS: 30 };
+    case 'swirl': return { ...base, count: 1 };
+    default: return base; // release, cut
+  }
+}
+
+const SINGULAR = { beans: 'bean', rigs: 'rig', waters: 'water', recipes: 'recipe' };
 
 export function displayName(kind, entity) {
   return entity?.name?.trim() || `Untitled ${SINGULAR[kind]}`;
-}
-
-// ---------- capabilities ----------
-
-// Which recipe actions a rig can physically perform. The recipe builder and
-// pour coach read this; an impossible action is never offered.
-export function allowedActions(rig) {
-  const actions = ['pour', 'swirl'];
-  if (rig?.immersionCapable) actions.push('steep');
-  if (rig?.valveCapable) actions.push('release');
-  if (rig?.cuttable) actions.push('cut');
-  return actions;
 }
 
 // ---------- field schemas (drive the editor screens) ----------
@@ -80,6 +108,16 @@ export const FIELDS = {
     { key: 'valveCapable', label: 'Has a valve', type: 'bool', hint: 'Hario Switch, Clever. Enables release.' },
     { key: 'immersionCapable', label: 'Can steep', type: 'bool', hint: 'Planned immersion. Enables steep.' },
     { key: 'cuttable', label: 'Can be cut', type: 'bool', hint: 'Dripper can be lifted to end extraction early.' },
+  ],
+  recipes: [
+    { key: 'name', label: 'Name', placeholder: 'e.g. Yuan valve-lock' },
+    { key: 'rigId', label: 'Rig', type: 'ref', ref: 'rigs', empty: '— pick a rig —',
+      hint: 'Decides which steps are possible.' },
+    { key: 'beanId', label: 'Bean', type: 'ref', ref: 'beans', empty: 'Any bean' },
+    { key: 'waterId', label: 'Water', type: 'ref', ref: 'waters', empty: '— none —' },
+    { key: 'doseG', label: 'Dose (g)', type: 'number' },
+    { key: 'targetOutputMl', label: 'Target output (ml)', type: 'number' },
+    { key: 'cueLeadS', label: 'Cue lead (s)', type: 'number', hint: 'Warning before each step in the pour coach.' },
   ],
   waters: [
     { key: 'name', label: 'Name', placeholder: 'e.g. OMB 75 ppm' },

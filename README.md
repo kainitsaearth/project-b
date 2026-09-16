@@ -42,6 +42,7 @@ Phases are derived from the timeline and depend on the rig. A V60 has no steep.
 | `store.js` | IndexedDB — the only module that touches the database |
 | `model.js` | Factories, ids, defaults, rig capability flags |
 | `compute.js` | **Pure** — ratio, retention, days off roast, diff |
+| `recipe.js` | **Pure** — plan derivation, rig capability checks, validation, version forking |
 | `timeline.js` | **Pure** — phase segmentation, drift, cut handling |
 | `coach.js` | Pure cue scheduler + thin timer/haptic adapter |
 | `ui.js` | Rendering and event wiring |
@@ -49,7 +50,7 @@ Phases are derived from the timeline and depend on the rig. A V60 has no steep.
 | `tests.js` | Console assertions, run on load |
 | `sw.js` | Service worker |
 
-`compute.js`, `timeline.js` and the scheduler half of `coach.js` import nothing and touch no DOM. Data in, data out.
+`compute.js`, `recipe.js`, `timeline.js` and the scheduler half of `coach.js` import nothing and touch no DOM. Data in, data out.
 
 ## Development
 

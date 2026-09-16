@@ -3,9 +3,10 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=3';
-import * as model from './model.js?v=3';
-import { createUI } from './ui.js?v=3';
+import * as store from './store.js?v=4';
+import * as model from './model.js?v=4';
+import * as recipeLib from './recipe.js?v=4';
+import { createUI } from './ui.js?v=4';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -13,7 +14,7 @@ const SCHEMA = 2;
 
 const state = {
   meta: { seeded: false },
-  beans: {}, rigs: {}, waters: {},   // id → entity
+  beans: {}, rigs: {}, waters: {}, recipes: {}, sessions: {},   // id → entity
 };
 
 // JSON of what is known to be on disk, per record.
@@ -125,11 +126,11 @@ function seed() {
 
 // ---------- routing ----------
 
-const ROUTE = /^#\/(beans|rigs|waters)(?:\/([^/]+))?$/;
+const ROUTE = /^#\/(recipes|beans|rigs|waters)(?:\/([^/]+))?$/;
 
 function currentRoute() {
   const m = ROUTE.exec(location.hash);
-  return m ? { kind: m[1], id: m[2] ? decodeURIComponent(m[2]) : null } : { kind: 'beans', id: null };
+  return m ? { kind: m[1], id: m[2] ? decodeURIComponent(m[2]) : null } : { kind: 'recipes', id: null };
 }
 
 function navigate(hash) {
@@ -141,18 +142,90 @@ function render() {
   ui?.render(state, currentRoute());
 }
 
-const actions = {
+const recipeUsage = id => recipeLib.recipeUsage(Object.values(state.sessions)).get(id) ?? 0;
+
+// The single gate for recipe changes: refuses frozen recipes, re-derives after every edit.
+function editRecipe(id, fn) {
+  const recipe = state.recipes[id];
+  if (!recipe) return false;
+  if (recipeUsage(id) > 0) {
+    console.warn(`[recipe] refused edit: ${id} is used by brews — fork a new version`);
+    return false;
+  }
+  mutate(s => {
+    const r = s.recipes[id];
+    fn(r);
+    Object.assign(r, recipeLib.normalizeRecipe(r)); // in place: UI closures keep a live reference
+  });
+  return true;
+}
+
+const goToEntity = (kind, id) => navigate(`#/${kind}/${encodeURIComponent(id)}`);
+
+export const actions = {
   create(kind) {
-    const entity = model.factories[kind]();
+    let entity = model.factories[kind]();
+    if (kind === 'recipes') entity = recipeLib.normalizeRecipe(entity);
     mutate(s => { s[kind][entity.id] = entity; });
-    navigate(`#/${kind}/${encodeURIComponent(entity.id)}`);
+    goToEntity(kind, entity.id);
   },
   update(kind, id, key, value) {
+    if (kind === 'recipes') return editRecipe(id, r => { r[key] = value; });
     mutate(s => { if (s[kind][id]) s[kind][id][key] = value; });
+    return true;
   },
   remove(kind, id) {
+    if (kind === 'recipes' && recipeUsage(id) > 0) return false; // would orphan brew history
     mutate(s => { delete s[kind][id]; });
     navigate(`#/${kind}`);
+    return true;
+  },
+
+  // ---- recipes ----
+  recipeUsage,
+  editStep(id, stepId, key, value) {
+    return editRecipe(id, r => {
+      const step = r.plan.find(a => a.id === stepId);
+      if (step) step[key] = value;
+    });
+  },
+  addStep(id, action) {
+    const recipe = state.recipes[id];
+    if (!recipe || !recipeLib.allowedActions(state.rigs[recipe.rigId]).includes(action)) return null;
+    const step = model.createAction(action, recipe.plan);
+    return editRecipe(id, r => { r.plan.push(step); }) ? step.id : null;
+  },
+  moveStep(id, stepId, delta) {
+    return editRecipe(id, r => {
+      const i = r.plan.findIndex(a => a.id === stepId);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= r.plan.length) return;
+      [r.plan[i], r.plan[j]] = [r.plan[j], r.plan[i]];
+    });
+  },
+  removeStep(id, stepId) {
+    return editRecipe(id, r => { r.plan = r.plan.filter(a => a.id !== stepId); });
+  },
+  // Refuses a switch that would leave impossible steps: returns the conflicts, changes nothing.
+  // With adapt: true the user has seen the list and confirmed the fix.
+  changeRig(id, rigId, { adapt = false } = {}) {
+    const recipe = state.recipes[id];
+    if (!recipe) return [];
+    const rig = state.rigs[rigId];
+    const conflicts = rig ? recipeLib.rigConflicts(recipe.plan, rig) : [];
+    if (conflicts.length && !adapt) return conflicts;
+    editRecipe(id, r => {
+      if (adapt && rig) r.plan = recipeLib.adaptPlanToRig(r.plan, rig);
+      r.rigId = rigId || null;
+    });
+    return [];
+  },
+  forkRecipe(id) {
+    const recipe = state.recipes[id];
+    if (!recipe) return;
+    const fork = recipeLib.forkRecipe(recipe, model.uid('recipe'), Object.values(state.recipes));
+    mutate(s => { s.recipes[fork.id] = fork; });
+    goToEntity('recipes', fork.id);
   },
 };
 
@@ -179,7 +252,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=3').then(m => m.runTests());
+    import('./tests.js?v=4').then(m => m.runTests());
   }
 }
 

@@ -1,12 +1,18 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=3';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=3';
+import * as model from './model.js?v=4';
+import * as recipeLib from './recipe.js?v=4';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=4';
 
 const LABELS = {
+  recipes: ['Recipes', 'recipe'],
   beans: ['Beans', 'bean'],
   rigs: ['Rigs', 'rig'],
   waters: ['Waters', 'water'],
+};
+
+const ACTION_TITLES = {
+  pour: 'Pour', swirl: 'Swirl', steep: 'Steep', release: 'Release valve', cut: 'Cut — lift dripper',
 };
 
 // Tiny element builder. User text always goes in as text nodes, never as HTML.
@@ -19,11 +25,24 @@ function h(tag, props = {}, ...children) {
     else if (k in el && k !== 'list') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of children.flat(2)) {
+  for (const c of children.flat(3)) {
     if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
   }
   return el;
 }
+
+const row = (label, value) => h('div', { class: 'derived-row' },
+  h('span', { class: 'derived-label' }, label),
+  h('span', { class: 'derived-value' }, value));
+
+const fmt = n => String(Math.round(n * 10) / 10);
+
+const toNum = raw => {
+  const t = String(raw).trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+};
 
 function todayISO() {
   const d = new Date();
@@ -37,30 +56,53 @@ function beanAge(bean) {
 }
 
 export function createUI(view, tabs, actions) {
-  let mountedKey = null;      // editor currently in the DOM
-  let refreshDerived = null;  // updates computed rows without rebuilding inputs
+  let mountedKey = null;       // what is in the DOM: "kind/id" (+ "|structure" for recipes)
+  let refreshDerived = null;   // updates computed text without rebuilding inputs
+  let lastState = null;
+  let lastRoute = null;
+  let rigPrompt = null;        // { recipeId, rigId, conflicts } — a refused rig switch awaiting a decision
+  let scrollToLastStep = false;
 
   function render(state, route) {
+    lastState = state;
+    lastRoute = route;
     renderTabs(route.kind);
+    if (rigPrompt && rigPrompt.recipeId !== route.id) rigPrompt = null;
 
     if (!route.id) {
       mountedKey = null;
       refreshDerived = null;
-      view.replaceChildren(list(route.kind, state[route.kind]));
+      view.replaceChildren(list(route.kind, state));
       return;
     }
 
-    const key = `${route.kind}/${route.id}`;
     const entity = state[route.kind][route.id];
-    // Same editor still open: rebuilding it would steal focus mid-typing.
+    const baseKey = `${route.kind}/${route.id}`;
+    const key = entity && route.kind === 'recipes' ? `${baseKey}|${recipeStructure(state, entity)}` : baseKey;
+
+    // Same screen, same structure: only refresh computed text. Rebuilding would
+    // close the phone keyboard mid-number.
     if (entity && mountedKey === key) {
       refreshDerived?.(entity);
       return;
     }
+
+    const sameEntity = mountedKey?.split('|')[0] === baseKey;
     mountedKey = entity ? key : null;
-    view.replaceChildren(entity ? editor(route.kind, entity) : notFound(route.kind));
-    scrollTo(0, 0);
+    refreshDerived = null;
+    view.replaceChildren(!entity ? notFound(route.kind)
+      : route.kind === 'recipes' ? recipeEditor(state, entity)
+      : editor(state, route.kind, entity));
+
+    if (scrollToLastStep) {
+      scrollToLastStep = false;
+      [...view.querySelectorAll('.step')].pop()?.scrollIntoView({ block: 'center' });
+    } else if (!sameEntity) {
+      scrollTo(0, 0);
+    }
   }
+
+  const rerender = () => render(lastState, lastRoute);
 
   function renderTabs(active) {
     tabs.replaceChildren(...Object.keys(LABELS).map(k => h('a', {
@@ -72,10 +114,11 @@ export function createUI(view, tabs, actions) {
 
   // ---------- list ----------
 
-  function list(kind, items) {
+  function list(kind, state) {
     const [plural, singular] = LABELS[kind];
-    const sorted = Object.values(items).sort((a, b) =>
-      model.displayName(kind, a).localeCompare(model.displayName(kind, b), undefined, { numeric: true }));
+    const byName = (a, b) => model.displayName(kind, a).localeCompare(model.displayName(kind, b), undefined, { numeric: true });
+    const sorted = Object.values(state[kind]).sort((a, b) =>
+      byName(a, b) || (kind === 'recipes' ? (b.version ?? 1) - (a.version ?? 1) : 0));
 
     return h('section', { class: 'screen' },
       h('div', { class: 'screen-head' },
@@ -85,15 +128,35 @@ export function createUI(view, tabs, actions) {
         ? h('ul', { class: 'list' }, sorted.map(e => h('li', {},
             h('a', { class: 'list-item', href: `#/${kind}/${encodeURIComponent(e.id)}` },
               h('span', { class: 'list-title' }, model.displayName(kind, e)),
-              summary(kind, e)))))
+              summary(state, kind, e)))))
         : h('p', { class: 'empty' }, `No ${plural.toLowerCase()} yet.`));
   }
 
-  function summary(kind, e) {
+  function summary(state, kind, e) {
     const line = parts => {
       const text = parts.filter(p => p != null && p !== '').join(' · ');
       return text ? h('span', { class: 'list-sub' }, text) : null;
     };
+    if (kind === 'recipes') {
+      const rig = state.rigs[e.rigId];
+      const usage = actions.recipeUsage(e.id);
+      const issues = recipeLib.validateRecipe(e, rig);
+      const steps = e.plan?.length ?? 0;
+      return [
+        line([
+          rig ? model.displayName('rigs', rig) : 'no rig',
+          `${steps} ${steps === 1 ? 'step' : 'steps'}`,
+          e.totalWaterMl != null ? `${fmt(e.totalWaterMl)} ml` : null,
+          e.targetTotalTimeS != null ? recipeLib.formatClock(e.targetTotalTimeS) : null,
+        ]),
+        h('span', { class: 'badges' },
+          h('span', { class: 'badge' }, `v${e.version ?? 1}`),
+          usage > 0 ? h('span', { class: 'badge' }, `🔒 ${usage} ${usage === 1 ? 'brew' : 'brews'}`) : null,
+          issues.length
+            ? h('span', { class: 'badge badge-warn' }, `${issues.length} to fix`)
+            : h('span', { class: 'badge badge-ok' }, 'complete')),
+      ];
+    }
     if (kind === 'beans') return [
       line([e.origin, e.process, e.roastLevel]),
       h('span', { class: 'list-sub' }, 'Days off roast: ', h('output', { class: 'days-off-roast' }, beanAge(e))),
@@ -105,9 +168,9 @@ export function createUI(view, tabs, actions) {
     return line([e.type, e.ppm != null ? `${e.ppm} ppm` : null]);
   }
 
-  // ---------- editor ----------
+  // ---------- generic editor (beans, rigs, waters) ----------
 
-  function editor(kind, entity) {
+  function editor(state, kind, entity) {
     const [plural, singular] = LABELS[kind];
     const derived = h('div', { class: 'derived' });
     refreshDerived = e => {
@@ -121,24 +184,25 @@ export function createUI(view, tabs, actions) {
       h('a', { class: 'back', href: `#/${kind}` }, `‹ ${plural}`),
       h('h2', {}, `Edit ${singular}`),
       h('form', { class: 'form', onsubmit: ev => ev.preventDefault() },
-        model.FIELDS[kind].map(f => [field(kind, entity, f), f.derivedAfter ? derived : null])),
+        model.FIELDS[kind].map(f => [field(state, kind, entity, f), f.derivedAfter ? derived : null])),
       // Computed rows sit next to the field that drives them, else at the end.
       model.FIELDS[kind].some(f => f.derivedAfter) ? null : derived,
-      h('button', {
-        type: 'button', class: 'btn btn-danger',
-        onclick: () => {
-          if (confirm(`Delete “${model.displayName(kind, entity)}”? This cannot be undone.`)) {
-            actions.remove(kind, entity.id);
-          }
-        },
-      }, `Delete ${singular}`));
+      deleteButton(kind, entity));
+  }
+
+  function deleteButton(kind, entity) {
+    const singular = LABELS[kind][1];
+    return h('button', {
+      type: 'button', class: 'btn btn-danger',
+      onclick: () => {
+        if (confirm(`Delete “${model.displayName(kind, entity)}”? This cannot be undone.`)) {
+          actions.remove(kind, entity.id);
+        }
+      },
+    }, `Delete ${singular}`);
   }
 
   function derivedRows(kind, e) {
-    const row = (label, value) => h('div', { class: 'derived-row' },
-      h('span', { class: 'derived-label' }, label),
-      h('span', { class: 'derived-value' }, value));
-
     if (kind === 'beans') {
       return [row('Days off roast', h('output', { class: 'days-off-roast' }, beanAge(e)))];
     }
@@ -153,35 +217,39 @@ export function createUI(view, tabs, actions) {
     return [];
   }
 
-  function field(kind, entity, f) {
+  function field(state, kind, entity, f, { disabled = false, onSet = null } = {}) {
     const id = `f-${f.key}`;
-    const set = value => actions.update(kind, entity.id, f.key, value);
+    const set = onSet ?? (value => actions.update(kind, entity.id, f.key, value));
     const hint = f.hint ? h('small', { class: 'field-hint' }, f.hint) : null;
 
     if (f.type === 'bool') {
       return h('label', { class: 'toggle' },
-        h('input', { type: 'checkbox', id, checked: Boolean(entity[f.key]), onchange: ev => set(ev.target.checked) }),
+        h('input', { type: 'checkbox', id, disabled, checked: Boolean(entity[f.key]), onchange: ev => set(ev.target.checked) }),
         h('span', { class: 'toggle-text' }, h('span', { class: 'field-label' }, f.label), hint));
     }
 
     let control;
     if (f.type === 'textarea') {
-      control = h('textarea', { id, rows: 3, value: entity[f.key] ?? '', oninput: ev => set(ev.target.value) });
+      control = h('textarea', { id, disabled, rows: 3, value: entity[f.key] ?? '', oninput: ev => set(ev.target.value) });
     } else if (f.type === 'select') {
-      control = h('select', { id, onchange: ev => set(ev.target.value) },
+      control = h('select', { id, disabled, onchange: ev => set(ev.target.value) },
         f.options.map(o => h('option', { value: o, selected: entity[f.key] === o }, o)));
+    } else if (f.type === 'ref') {
+      const current = entity[f.key] ?? '';
+      const options = Object.values(state[f.ref])
+        .sort((a, b) => model.displayName(f.ref, a).localeCompare(model.displayName(f.ref, b), undefined, { numeric: true }));
+      control = h('select', { id, disabled, onchange: ev => set(ev.target.value || null) },
+        h('option', { value: '', selected: current === '' }, f.empty),
+        current && !state[f.ref][current] ? h('option', { value: current, selected: true }, '(deleted)') : null,
+        options.map(o => h('option', { value: o.id, selected: o.id === current }, model.displayName(f.ref, o))));
     } else if (f.type === 'number') {
       control = h('input', {
-        id, type: 'number', inputMode: 'decimal', step: 'any', value: entity[f.key] ?? '',
-        oninput: ev => {
-          const raw = ev.target.value.trim();
-          const n = raw === '' ? null : Number(raw);
-          set(Number.isFinite(n) ? n : null);
-        },
+        id, disabled, type: 'number', inputMode: 'decimal', step: 'any', value: entity[f.key] ?? '',
+        oninput: ev => set(toNum(ev.target.value)),
       });
     } else {
       control = h('input', {
-        id, type: 'text', autocomplete: 'off', value: entity[f.key] ?? '',
+        id, disabled, type: 'text', autocomplete: 'off', value: entity[f.key] ?? '',
         placeholder: f.placeholder, list: f.suggestions ? `${id}-list` : null,
         oninput: ev => set(ev.target.value),
       });
@@ -192,6 +260,190 @@ export function createUI(view, tabs, actions) {
       control,
       f.suggestions ? h('datalist', { id: `${id}-list` }, f.suggestions.map(s => h('option', { value: s }))) : null,
       hint);
+  }
+
+  // ---------- recipe editor ----------
+
+  // Anything that changes which inputs exist. Typing into an input never changes this.
+  function recipeStructure(state, r) {
+    const rig = state.rigs[r.rigId];
+    return JSON.stringify([
+      r.rigId, recipeLib.allowedActions(rig), Boolean(rig?.valveCapable),
+      actions.recipeUsage(r.id) > 0,
+      (r.plan ?? []).map(a => a.id),
+      rigPrompt?.recipeId === r.id ? rigPrompt.rigId : null,
+    ]);
+  }
+
+  function requestRigChange(recipeId, rigId) {
+    rigPrompt = null;
+    const conflicts = actions.changeRig(recipeId, rigId);
+    if (conflicts.length) {
+      rigPrompt = { recipeId, rigId, conflicts };
+      rerender();
+      document.getElementById('rig-switch-alert')?.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function recipeEditor(state, recipe) {
+    const rig = state.rigs[recipe.rigId];
+    const usage = actions.recipeUsage(recipe.id);
+    const frozen = usage > 0;
+    const refreshers = [];
+    refreshDerived = r => refreshers.forEach(fn => fn(r));
+
+    const fields = model.FIELDS.recipes.map(f => {
+      if (f.key !== 'rigId') return field(state, 'recipes', recipe, f, { disabled: frozen });
+      return [
+        field(state, 'recipes', recipe, f, { disabled: frozen, onSet: v => requestRigChange(recipe.id, v) }),
+        rigPrompt?.recipeId === recipe.id ? rigSwitchAlert(state, recipe, rigPrompt) : null,
+      ];
+    });
+
+    const summaryEl = h('div', { class: 'derived recipe-summary', id: 'recipe-summary' });
+    refreshers.push(r => summaryEl.replaceChildren(...recipeSummary(state, r)));
+
+    const el = h('section', { class: 'screen' },
+      h('a', { class: 'back', href: '#/recipes' }, '‹ Recipes'),
+      h('div', { class: 'screen-head' },
+        h('h2', {}, frozen ? 'Recipe' : 'Edit recipe'),
+        h('span', { class: 'badge badge-version' }, `v${recipe.version ?? 1}`)),
+      frozen ? h('div', { class: 'alert alert-info', id: 'frozen-banner' },
+        h('strong', {}, `🔒 Used by ${usage} ${usage === 1 ? 'brew' : 'brews'}`),
+        h('p', {}, 'Frozen so past brews keep the plan they ran. Changes go into a new version.'),
+        h('button', { type: 'button', class: 'btn btn-primary', id: 'fork-recipe', onclick: () => actions.forkRecipe(recipe.id) },
+          'Edit as new version')) : null,
+      h('form', { class: 'form', onsubmit: ev => ev.preventDefault() }, fields),
+      h('h3', { class: 'section-title' }, 'Plan'),
+      summaryEl,
+      recipe.plan.length
+        ? h('ol', { class: 'steps' }, recipe.plan.map((a, i) => stepCard(state, recipe, rig, a, i, frozen, refreshers)))
+        : h('p', { class: 'empty' }, 'No steps yet.'),
+      frozen ? null : addStepBar(recipe, rig),
+      h('datalist', { id: 'pour-styles' }, model.POUR_STYLES.map(s => h('option', { value: s }))),
+      frozen ? null : deleteButton('recipes', recipe));
+
+    refreshDerived(recipe);
+    return el;
+  }
+
+  function rigSwitchAlert(state, recipe, p) {
+    const target = model.displayName('rigs', state.rigs[p.rigId]);
+    const current = state.rigs[recipe.rigId];
+    return h('div', { class: 'alert alert-danger', role: 'alert', id: 'rig-switch-alert' },
+      h('strong', {}, `Can't switch to ${target} as is`),
+      h('ul', {}, p.conflicts.map(c => h('li', {}, c.message))),
+      h('p', {}, h('b', {}, 'Nothing has been changed.'), ' To switch anyway, the app would:'),
+      h('ul', {}, p.conflicts.map(c => h('li', {}, c.fixText))),
+      h('div', { class: 'alert-actions' },
+        h('button', {
+          type: 'button', class: 'btn btn-primary', id: 'rig-switch-adapt',
+          onclick: () => { rigPrompt = null; actions.changeRig(recipe.id, p.rigId, { adapt: true }); },
+        }, 'Make these changes and switch'),
+        h('button', {
+          type: 'button', class: 'btn', id: 'rig-switch-cancel',
+          onclick: () => { rigPrompt = null; rerender(); },
+        }, current ? `Keep ${model.displayName('rigs', current)}` : 'Cancel')));
+  }
+
+  function recipeSummary(state, r) {
+    const issues = recipeLib.validateRecipe(r, state.rigs[r.rigId]);
+    return [
+      row('Total water', r.totalWaterMl != null ? `${fmt(r.totalWaterMl)} ml` : '—'),
+      row('Brew ratio', r.targetRatio != null ? `1:${r.targetRatio.toFixed(1)}` : '—'),
+      row('Total time', r.targetTotalTimeS != null ? recipeLib.formatClock(r.targetTotalTimeS) : '—'),
+      issues.length
+        ? h('ul', { class: 'issues', id: 'recipe-issues' }, issues.map(x => h('li', {}, x.message)))
+        : h('p', { class: 'ready', id: 'recipe-ready' }, '✓ Plan complete'),
+    ];
+  }
+
+  function stepCard(state, recipe, rig, a, i, frozen, refreshers) {
+    const n = recipe.plan.length;
+    const set = (key, value) => actions.editStep(recipe.id, a.id, key, value);
+    const inputId = key => `s-${a.id}-${key}`;
+    const labeled = (label, control) => h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, label), control);
+    const num = (key, label) => labeled(label, h('input', {
+      id: inputId(key), type: 'number', inputMode: 'decimal', step: 'any',
+      value: a[key] ?? '', disabled: frozen, oninput: ev => set(key, toNum(ev.target.value)),
+    }));
+    const iconBtn = (text, label, disabled, onclick) =>
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label, disabled, onclick }, text);
+
+    const clock = labeled('At', h('input', {
+      id: inputId('atS'), type: 'text', inputMode: 'decimal', placeholder: 'm:ss', class: 'clock',
+      value: recipeLib.formatClock(a.atS), disabled: frozen,
+      oninput: ev => set('atS', recipeLib.parseClock(ev.target.value)),
+      onchange: ev => {
+        const s = recipeLib.parseClock(ev.target.value);
+        if (s !== null) ev.target.value = recipeLib.formatClock(s);
+      },
+    }));
+
+    let body = [];
+    if (a.action === 'pour') {
+      body = [
+        num('volumeMl', 'ml'),
+        num('tempC', '°C'),
+        labeled('Style', h('input', {
+          id: inputId('style'), type: 'text', list: 'pour-styles', autocomplete: 'off',
+          value: a.style ?? '', disabled: frozen, oninput: ev => set('style', ev.target.value),
+        })),
+        rig?.valveCapable || a.valve === 'closed'
+          ? labeled('Valve', h('select', { id: inputId('valve'), disabled: frozen, onchange: ev => set('valve', ev.target.value) },
+              ['open', 'closed'].map(v => h('option', { value: v, selected: (a.valve ?? 'open') === v }, v))))
+          : null,
+      ];
+    } else if (a.action === 'steep') {
+      body = [num('durationS', 'Steep (s)')];
+    } else if (a.action === 'swirl') {
+      body = [num('count', 'Swirls')];
+    }
+
+    const cumulative = h('output', { class: 'step-cumulative' });
+    const issuesEl = h('ul', { class: 'issues step-issues' });
+
+    const card = h('li', { class: 'step', id: `step-${a.id}`, 'data-action': a.action },
+      h('div', { class: 'step-head' },
+        h('span', { class: 'step-num' }, i + 1),
+        h('span', { class: 'step-action' }, ACTION_TITLES[a.action] ?? a.action),
+        frozen ? null : h('span', { class: 'step-tools' },
+          iconBtn('↑', `Move step ${i + 1} up`, i === 0, () => actions.moveStep(recipe.id, a.id, -1)),
+          iconBtn('↓', `Move step ${i + 1} down`, i === n - 1, () => actions.moveStep(recipe.id, a.id, +1)),
+          iconBtn('✕', `Remove step ${i + 1}`, false, () => actions.removeStep(recipe.id, a.id)))),
+      h('div', { class: 'step-body' }, clock, body),
+      a.action === 'pour' ? cumulative : null,
+      issuesEl);
+
+    refreshers.push(r => {
+      const s = r.plan.find(x => x.id === a.id);
+      if (!s) return;
+      if (s.action === 'pour') {
+        cumulative.textContent = s.cumulativeMl != null ? `→ ${fmt(s.cumulativeMl)} ml on the scale` : '→ ? ml on the scale';
+      }
+      const own = recipeLib.validateRecipe(r, state.rigs[r.rigId]).filter(x => x.stepId === a.id);
+      issuesEl.replaceChildren(...own.map(x => h('li', {}, x.message.replace(/^Step \d+ \([a-z]+\): /, ''))));
+      issuesEl.hidden = own.length === 0;
+      card.classList.toggle('has-issues', own.length > 0);
+    });
+
+    return card;
+  }
+
+  function addStepBar(recipe, rig) {
+    if (!rig) {
+      return h('p', { class: 'hint-box', id: 'add-step-blocked' }, recipe.rigId
+        ? "This recipe's rig no longer exists. Pick one above to add steps."
+        : 'Pick a rig first. It decides which steps are possible.');
+    }
+    const allowed = recipeLib.allowedActions(rig);
+    return h('div', { class: 'add-steps', id: 'add-steps' },
+      h('span', { class: 'mini-label' }, 'Add step'),
+      h('div', { class: 'add-steps-buttons' },
+        recipeLib.ALL_ACTIONS.filter(x => allowed.includes(x)).map(x => h('button', {
+          type: 'button', class: 'btn', 'data-add': x,
+          onclick: () => { scrollToLastStep = true; if (!actions.addStep(recipe.id, x)) scrollToLastStep = false; },
+        }, `+ ${x}`))));
   }
 
   function notFound(kind) {
