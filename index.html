@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1b1a18">
   <title>Project B</title>
-  <link rel="stylesheet" href="styles.css?v=1">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header class="topbar">
@@ -13,16 +13,10 @@
     <span id="not-saving" class="chip chip-danger" role="alert" hidden>NOT SAVING</span>
   </header>
 
-  <main>
-    <!-- Step 1 throwaway screen: proves the persistence loop. Removed in Step 2. -->
-    <section id="screen-counter" class="screen">
-      <p class="label">Persistence check</p>
-      <output id="counter-value" class="big-number">0</output>
-      <button id="counter-inc" class="btn btn-primary btn-thumb">+1</button>
-      <button id="counter-reset" class="btn">Reset</button>
-    </section>
-  </main>
+  <main id="view"></main>
 
-  <script type="module" src="app.js?v=1"></script>
+  <nav id="tabs" class="tabs" aria-label="Sections"></nav>
+
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>

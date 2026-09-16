@@ -61,11 +61,21 @@ python -m http.server 8000
 
 Then open `http://localhost:8000`.
 
+## Tests
+
+```sh
+node tests.js
+```
+
+They also run in the browser console on `localhost`, or on any host with `?test`.
+
+`?simulate=storefail` makes every write fail, to check the **NOT SAVING** chip.
+
 ## Deploying
 
 Push to `main`. GitHub Pages serves from the repo root.
 
-> **Bump `CACHE` in `sw.js` and the `?v=` asset query on every change**, or installed phones keep serving the old version.
+> **Bump `CACHE` in `sw.js` and every `?v=` on every change** — in `index.html` *and* in every `import` specifier inside the modules. The same module imported under two different `?v=` values loads twice.
 
 ## Design docs
 

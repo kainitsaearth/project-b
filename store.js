@@ -64,6 +64,33 @@ export const getAll = store => tx(store, 'readonly', s => req(s.getAll()));
 export const put = (store, obj) => tx(store, 'readwrite', s => { s.put(obj); });
 export const remove = (store, id) => tx(store, 'readwrite', s => { s.delete(id); });
 
+// Apply many writes in ONE transaction: all land or none do.
+// ops: { store, type: 'put', value, key? } | { store, type: 'delete', key }
+export async function commit(ops) {
+  if (!ops.length) return;
+  if (SIMULATE_FAIL) throw new Error('Simulated storage failure');
+  const db = await open();
+  const names = [...new Set(ops.map(o => o.store))];
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(names, 'readwrite');
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error || new Error('Transaction aborted'));
+    try {
+      for (const op of ops) {
+        const s = t.objectStore(op.store);
+        if (op.type === 'delete') s.delete(op.key);
+        else if (op.key === undefined) s.put(op.value);
+        else s.put(op.value, op.key);
+      }
+    } catch (err) {
+      // A synchronous throw would otherwise let the earlier ops auto-commit.
+      t.abort();
+      reject(err);
+    }
+  });
+}
+
 // Ask Chrome not to evict this origin's data under storage pressure.
 export async function requestPersistence() {
   if (!navigator.storage?.persist) return false;
