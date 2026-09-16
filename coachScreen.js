@@ -1,0 +1,336 @@
+// coachScreen.js — the pour coach screen and its thin adapter: clock, vibration, sound,
+// colour, screen wake lock. All timing decisions come from pure coach.js; this file only
+// follows them. Taps go through actions (→ mutate → saved), never straight to storage.
+
+import { h } from './dom.js?v=11';
+import * as model from './model.js?v=11';
+import * as recipeLib from './recipe.js?v=11';
+import * as C from './coach.js?v=11';
+
+// Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
+const SPEED = (() => {
+  const v = Number(new URLSearchParams(location.search).get('coachspeed'));
+  return Number.isFinite(v) && v > 0 ? v : 1;
+})();
+
+export const COACH_DEFAULTS = Object.freeze({ sound: true, vibration: true });
+
+const clock = t => {
+  if (t == null || !Number.isFinite(t)) return '';
+  const neg = t < 0;
+  const s = Math.floor(Math.abs(t) + (neg ? 0.999 : 0));
+  return `${neg ? '−' : ''}${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const signed = d => {
+  const r = Math.round(d * 10) / 10;
+  return r > 0 ? `+${r.toFixed(1)}` : r < 0 ? r.toFixed(1) : '0.0';   // never "−0.0"
+};
+
+function stepDetail(fire) {
+  return fire.actions.map(a => {
+    if (a.type !== 'pour') return null;
+    return [
+      a.volumeMl != null ? `${a.volumeMl} ml → ${a.cumulativeMl ?? '?'} g on scale` : null,
+      a.tempC != null ? `${a.tempC} °C` : null,
+      a.flowRate != null ? `flow ${a.flowRate}` : null,
+      a.style || null,
+      a.valve ? `valve ${a.valve}` : null,
+    ].filter(Boolean).join(' · ');
+  }).filter(Boolean).join(' | ');
+}
+
+// ---------- signals: vibration, sound, and a record for checks ----------
+
+function createSignals(settings) {
+  let ctx = null;
+  const beep = (freq, dur) => {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.5, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + dur + 0.05);
+  };
+  return {
+    // Audio can only start from a user gesture (START, TAP, Test buzz).
+    unlock() {
+      try {
+        if (!ctx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) ctx = new Ctx();
+        }
+        ctx?.resume?.();
+      } catch { /* no audio on this device */ }
+    },
+    play(kind) {
+      const s = settings();
+      window.__coachSignals?.push(kind);
+      if (s.vibration && navigator.vibrate) navigator.vibrate(kind === 'fire' ? [250] : kind === 'tap' ? [25] : [70]);
+      if (s.sound) beep(kind === 'fire' ? 1320 : kind === 'tap' ? 520 : 880, kind === 'fire' ? 0.25 : 0.07);
+    },
+  };
+}
+
+// ---------- the screen ----------
+
+// → { el, refresh(state), destroy() }
+export function coachScreen(initialState, recipe, actions) {
+  let state = initialState;
+  const rig = state.rigs[recipe.rigId];
+  const sched = C.schedule(recipe, { rig });
+  const fires = sched.events.filter(e => e.kind === 'fire');
+  const lastPourFire = fires.reduce((m, f, i) => (f.actions.some(a => a.type === 'pour') ? i : m), -1);
+  const settings = () => ({ ...COACH_DEFAULTS, ...(state.meta.coach ?? {}) });
+  const signals = createSignals(settings);
+  window.__coachSignals = [];
+
+  let raf = null;
+  let lastT = null;
+  let flashUntil = 0;
+  let wakeLock = null;
+  let builtFor = null;   // 'idle' | 'running' — which view is in the DOM
+
+  const mine = () => (state.activeBrew?.recipeId === recipe.id ? state.activeBrew : null);
+  const tNow = () => {
+    const ab = mine();
+    return ab ? ((Date.now() - ab.startedAtMs) / 1000) * SPEED : null;
+  };
+
+  const keepAwake = async () => {
+    try { if (navigator.wakeLock && !wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch { wakeLock = null; }
+  };
+  const onVisible = () => { if (document.visibilityState === 'visible' && mine()) { wakeLock = null; keepAwake(); } };
+  document.addEventListener('visibilitychange', onVisible);
+
+  const el = h('section', { class: 'coach', id: 'coach' });
+
+  // ---- idle: the plan, settings, START ----
+  function idleView() {
+    const other = state.activeBrew && !mine() ? state.recipes[state.activeBrew.recipeId] : null;
+    const s = settings();
+    const toggle = (key, label) => h('label', { class: 'toggle' },
+      h('input', { type: 'checkbox', id: `coach-${key}`, checked: s[key], onchange: ev => actions.setCoachSetting(key, ev.target.checked) }),
+      h('span', { class: 'toggle-text' }, h('span', { class: 'field-label' }, label)));
+
+    return h('div', { class: 'coach-idle' },
+      h('a', { class: 'back', href: `#/recipes/${encodeURIComponent(recipe.id)}` }, '‹ Recipe'),
+      h('div', { class: 'screen-head' },
+        h('h2', {}, model.displayName('recipes', recipe)),
+        h('span', { class: 'badge badge-version' }, `v${recipe.version ?? 1}`)),
+      h('p', { class: 'list-sub' }, `${model.displayName('rigs', rig)} · ${fires.length} cues · ${recipeLib.formatClock(sched.endS)}`),
+      h('ol', { class: 'coach-plan', id: 'coach-plan' }, fires.map(f => h('li', {},
+        h('span', { class: 'coach-plan-time' }, recipeLib.formatClock(f.atS)),
+        h('span', { class: 'coach-plan-label' }, f.label),
+        stepDetail(f) ? h('small', { class: 'field-hint' }, stepDetail(f)) : null))),
+      sched.skipped.length ? h('p', { class: 'field-hint' }, `Not cued: ${sched.skipped.map(x => `step ${x.seq} (${x.reason})`).join(', ')}`) : null,
+      h('div', { class: 'coach-settings' },
+        toggle('vibration', 'Vibration'),
+        toggle('sound', 'Sound'),
+        navigator.vibrate ? null : h('p', { class: 'field-hint', id: 'coach-no-vibrate' }, "This browser can't vibrate. Sound and colour still work."),
+        h('button', { type: 'button', class: 'btn', id: 'coach-test', onclick: () => {
+          signals.unlock();
+          signals.play('tick');
+          setTimeout(() => signals.play('fire'), 700);
+        } }, 'Test buzz')),
+      other
+        ? h('div', { class: 'alert alert-danger' },
+            h('strong', {}, 'Another brew is in progress'),
+            h('a', { class: 'btn', href: `#/brew/${encodeURIComponent(other.id)}` }, `Resume ${model.displayName('recipes', other)}`))
+        : h('button', { type: 'button', class: 'btn btn-primary coach-start', id: 'coach-start', onclick: () => {
+            signals.unlock();
+            // t = startS (the pre-roll, e.g. −3 s) at the moment of pressing START
+            actions.startBrew(recipe.id, Date.now() + (-sched.startS * 1000) / SPEED);
+            keepAwake();
+          } }, 'START'),
+      h('p', { class: 'field-hint' }, `The countdown starts ${sched.cueLeadS} s before the first pour. The screen stays awake while brewing.`));
+  }
+
+  // ---- running ----
+  const clockEl = h('div', { class: 'coach-clock', id: 'coach-clock' });
+  const countEl = h('div', { class: 'coach-count', id: 'coach-count' });
+  const nowEl = h('div', { class: 'coach-now', id: 'coach-now' });
+  const detailEl = h('div', { class: 'coach-detail', id: 'coach-detail' });
+  const nextEl = h('div', { class: 'coach-next', id: 'coach-next' });
+  const press = which => {
+    const t = tNow();
+    if (t === null) return;
+    signals.unlock();
+    signals.play('tap');
+    actions.brewTap(which, t);
+  };
+  const tapBtn = h('button', { type: 'button', class: 'coach-tap', id: 'coach-tap', onclick: () => press('main') });
+  const undoBtn = h('button', { type: 'button', class: 'btn', id: 'coach-undo', onclick: () => actions.undoTap() }, 'UNDO');
+  const valveBtn = rig?.valveCapable ? h('button', { type: 'button', class: 'btn', id: 'coach-valve', onclick: () => press('valve') }) : null;
+  const drawdownBtn = h('button', { type: 'button', class: 'btn', id: 'coach-drawdown', onclick: () => press('drawdown') }, 'DRAWDOWN DONE');
+  const cutBtn = rig?.cuttable ? h('button', { type: 'button', class: 'btn btn-cut', id: 'coach-cut', onclick: () => press('cut') }, 'CUT') : null;
+  const doneEl = h('ol', { class: 'coach-done', id: 'coach-done' });
+
+  function runningView() {
+    return h('div', { class: 'coach-run' },
+      h('div', { class: 'coach-top' },
+        clockEl,
+        h('button', { type: 'button', class: 'btn btn-small', id: 'coach-discard', onclick: () => {
+          if (confirm('Discard this brew? Its taps will be lost.')) actions.discardBrew();
+        } }, 'Discard')),
+      countEl, nowEl, detailEl, nextEl,
+      tapBtn,
+      h('div', { class: 'coach-secondary' }, undoBtn, valveBtn, drawdownBtn, cutBtn),
+      h('h3', { class: 'section-title' }, 'Tapped'),
+      doneEl);
+  }
+
+  function paintDone() {
+    const ab = mine();
+    if (!ab) return;
+    const rows = C.tapDrift(sched, ab.timeline).reverse();
+    doneEl.replaceChildren(...rows.map(d => h('li', { class: Math.abs(d.deltaS) > 5 ? 'late' : '' },
+      h('span', { class: 'coach-plan-time' }, clock(d.actualAtS)),
+      h('span', {}, d.label),
+      h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`))));
+  }
+
+  function paint(t) {
+    const ab = mine();
+    if (!ab) return;
+    const st = C.stateAt(sched, t);
+    const exp = C.expectedTap(sched, ab.timeline, t);
+    const ts = C.tapState(sched, ab.timeline);
+
+    el.dataset.t = t.toFixed(2);
+    clockEl.textContent = clock(t);
+    countEl.textContent = st.countdown ?? '';
+    el.classList.toggle('cueing', st.countdown !== null);
+    el.classList.toggle('fired', performance.now() < flashUntil);
+
+    tapBtn.textContent = exp.label;
+    tapBtn.dataset.kind = exp.kind;
+    tapBtn.disabled = exp.kind === 'none';
+
+    // NOW = what the metronome is counting toward; while nothing is counting, what the button does.
+    const focus = st.countdown !== null ? st.next : exp.kind === 'action' ? exp.fire : null;
+    nowEl.textContent = focus ? `${recipeLib.formatClock(focus.atS)} · ${focus.label}`
+      : exp.kind === 'pour-done' ? 'Pouring…' : exp.kind === 'drawdown-complete' ? 'Drawdown' : '';
+    detailEl.textContent = focus ? stepDetail(focus)
+      : exp.kind === 'pour-done' ? 'Tap POUR DONE when you stop pouring (optional)'
+      : exp.kind === 'drawdown-complete' ? 'Tap DRAWDOWN DONE when the bed is dry' : '';
+    const after = st.next ? fires[fires.indexOf(st.next) + 1] : null;
+    const upcoming = st.countdown !== null ? after : st.next;
+    nextEl.textContent = upcoming ? `then ${recipeLib.formatClock(upcoming.atS)} · ${upcoming.label}` : '';
+
+    undoBtn.disabled = ts.taps === 0;
+    if (valveBtn) {
+      // During a PLANNED steep the only valve action is the planned OPEN VALVE on the big button.
+      // A second "open" here would log the opening as a live lock and misclassify the steep.
+      valveBtn.hidden = ts.valveClosedBy === 'planned';
+      valveBtn.textContent = ts.valve === 'closed' ? 'RELEASE LOCK' : 'LOCK VALVE';
+    }
+    drawdownBtn.hidden = exp.kind === 'drawdown-complete' || ts.fireIndex <= lastPourFire;
+  }
+
+  function frame() {
+    raf = null;
+    const t = tNow();
+    if (t === null) return;
+    if (lastT === null) lastT = t;
+    const buzzes = C.buzzesBetween(sched, lastT, t);
+    // Screen was asleep or the tab hidden: signal only the latest moment, not a burst.
+    const toPlay = t - lastT > 1.5 ? buzzes.slice(-1) : buzzes;
+    for (const b of toPlay) {
+      signals.play(b.type);
+      if (b.type === 'fire') flashUntil = performance.now() + 600;
+    }
+    lastT = t;
+    paint(t);
+    raf = requestAnimationFrame(frame);
+  }
+
+  function build() {
+    const want = mine() ? 'running' : 'idle';
+    if (want === builtFor) return;
+    builtFor = want;
+    el.dataset.state = want;
+    if (want === 'running') {
+      el.replaceChildren(runningView());
+      lastT = null;   // resuming after reload: don't replay buzzes that already happened
+      paintDone();
+      keepAwake();
+      if (!raf) raf = requestAnimationFrame(frame);
+    } else {
+      if (raf) cancelAnimationFrame(raf);
+      raf = null;
+      el.classList.remove('cueing', 'fired');
+      el.replaceChildren(idleView());
+    }
+  }
+
+  build();
+
+  return {
+    el,
+    refresh(next) {
+      state = next;
+      build();
+      if (mine()) {
+        paintDone();
+        const t = tNow();
+        if (t !== null) paint(t);
+      }
+    },
+    destroy() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = null;
+      document.removeEventListener('visibilitychange', onVisible);
+      wakeLock?.release?.().catch(() => {});
+      wakeLock = null;
+    },
+  };
+}
+
+// ---------- after the brew ----------
+
+// Deliberately shows NO phases or drift: spec §6.3 "evidence follows judgement".
+// They are computed and saved; the assessment (Step 9) reveals them after scoring.
+export function brewSavedScreen(state, brewId) {
+  let brew = null;
+  for (const s of Object.values(state.sessions)) {
+    const found = (s.brews ?? []).find(b => b.id === brewId);
+    if (found) { brew = found; break; }
+  }
+  if (!brew) {
+    return h('section', { class: 'screen' },
+      h('a', { class: 'back', href: '#/recipes' }, '‹ Recipes'),
+      h('p', { class: 'empty' }, "This brew doesn't exist any more."));
+  }
+  const recipe = state.recipes[brew.recipeId];
+  const endS = brew.timeline.find(e => e.type === 'cut' || e.type === 'drawdown-complete')?.atS ?? null;
+  const when = new Date(brew.startedAt);
+
+  return h('section', { class: 'screen', id: 'brew-saved' },
+    h('a', { class: 'back', href: `#/recipes/${encodeURIComponent(brew.recipeId)}` }, '‹ Recipe'),
+    h('h2', {}, '✓ Brew saved'),
+    h('p', { class: 'list-sub' },
+      `${recipe ? model.displayName('recipes', recipe) : 'Deleted recipe'} v${brew.recipeVersion ?? 1} · `
+      + `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`),
+    h('div', { class: 'derived' },
+      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Ended by'),
+        h('span', { class: 'derived-value', id: 'brew-ended-by' }, brew.endedBy === 'cut' ? 'cut (dripper lifted)' : 'drawdown finished')),
+      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Brew time'),
+        h('span', { class: 'derived-value' }, endS != null ? clock(endS) : '—')),
+      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Taps recorded'),
+        h('span', { class: 'derived-value', id: 'brew-taps' }, String(new Set(brew.timeline.map(e => e.tap)).size)))),
+    h('div', { class: 'alert alert-info', id: 'drift-hidden' },
+      h('strong', {}, 'Phases and drift are hidden for now'),
+      h('p', {}, 'Taste and score the cup first, so the numbers can’t steer your score. They are saved and will appear after the assessment.')),
+    h('h3', { class: 'section-title' }, 'Your taps'),
+    h('ol', { class: 'coach-done' }, (brew.tapDrift ?? []).map(d => h('li', {},
+      h('span', { class: 'coach-plan-time' }, clock(d.actualAtS)),
+      h('span', {}, d.label),
+      h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`)))),
+    recipe ? h('a', { class: 'btn btn-primary', href: `#/brew/${encodeURIComponent(recipe.id)}`, id: 'brew-again' }, 'Brew again') : null);
+}

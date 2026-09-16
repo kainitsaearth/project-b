@@ -3,10 +3,12 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=10';
-import * as model from './model.js?v=10';
-import * as recipeLib from './recipe.js?v=10';
-import { createUI } from './ui.js?v=10';
+import * as store from './store.js?v=11';
+import * as model from './model.js?v=11';
+import * as recipeLib from './recipe.js?v=11';
+import * as coachLib from './coach.js?v=11';
+import * as timelineLib from './timeline.js?v=11';
+import { createUI } from './ui.js?v=11';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -15,6 +17,9 @@ const SCHEMA = 2;
 const state = {
   meta: { seeded: false },
   beans: {}, rigs: {}, waters: {}, recipes: {}, sessions: {},   // id → entity
+  // The brew being coached: { id, recipeId, startedAtMs, timeline }. Saved with the working
+  // state, so if Android kills the app mid-brew, reopening resumes with every tap intact.
+  activeBrew: null,
 };
 
 // JSON of what is known to be on disk, per record.
@@ -22,6 +27,7 @@ let saved = emptySnapshot();
 let saveTimer = null;
 let dirty = false;
 let inFlight = false;
+let flushRequested = false;   // a flush arrived while a write was in flight: run it right after
 let ui = null;
 
 function emptySnapshot() {
@@ -35,7 +41,7 @@ function setSaveStatus(ok, err) {
   if (!ok) console.error('[store] save failed:', err);
 }
 
-const kvValue = () => ({ schema: SCHEMA, meta: state.meta });
+const kvValue = () => ({ schema: SCHEMA, meta: state.meta, activeBrew: state.activeBrew });
 
 // Everything that differs from the last successful write, as one batch.
 function pendingOps() {
@@ -75,8 +81,11 @@ async function save() {
     setSaveStatus(false, err);
   } finally {
     inFlight = false;
-    // A mutate that landed mid-write still needs saving.
-    if (dirty && !failed) scheduleSave();
+    // A mutate that landed mid-write still needs saving — immediately if it asked to flush.
+    if (dirty && !failed) {
+      if (flushRequested) { flushRequested = false; clearTimeout(saveTimer); saveTimer = setTimeout(save, 0); }
+      else scheduleSave();
+    }
   }
 }
 
@@ -89,6 +98,7 @@ function scheduleSave() {
 // Save now when backgrounded — Android can kill the app at any point after.
 function flush() {
   if (!dirty) return;
+  if (inFlight) { flushRequested = true; return; }
   clearTimeout(saveTimer);
   save();
 }
@@ -103,6 +113,7 @@ async function load() {
   const kv = await store.getKV(STATE_KEY);
   // Step 1 stored { schema: 1, counter }. Only `meta` carries forward.
   if (kv?.meta) Object.assign(state.meta, kv.meta);
+  if (kv?.activeBrew && Array.isArray(kv.activeBrew.timeline)) state.activeBrew = kv.activeBrew;
   const snap = emptySnapshot();
   snap.kv = kv === undefined ? null : JSON.stringify(kv);
   for (const name of model.ENTITY_STORES) {
@@ -141,7 +152,7 @@ function seed() {
 
 // ---------- routing ----------
 
-const ROUTE = /^#\/(recipes|beans|rigs|waters)(?:\/([^/]+))?$/;
+const ROUTE = /^#\/(recipes|beans|rigs|waters|brew|result)(?:\/([^/]+))?$/;
 
 function currentRoute() {
   const m = ROUTE.exec(location.hash);
@@ -191,6 +202,7 @@ export const actions = {
   },
   remove(kind, id) {
     if (kind === 'recipes' && recipeUsage(id) > 0) return false; // would orphan brew history
+    if (kind === 'recipes' && state.activeBrew?.recipeId === id) return false; // being brewed right now
     mutate(s => { delete s[kind][id]; });
     navigate(`#/${kind}`);
     return true;
@@ -242,7 +254,102 @@ export const actions = {
     mutate(s => { s.recipes[fork.id] = fork; });
     goToEntity('recipes', fork.id);
   },
+
+  // ---- brewing ----
+  setCoachSetting(key, value) {
+    mutate(s => { s.meta.coach = { ...(s.meta.coach ?? {}), [key]: value }; });
+  },
+  startBrew(recipeId, startedAtMs) {
+    const recipe = state.recipes[recipeId];
+    if (!recipe || state.activeBrew) return false;
+    if (recipeLib.validateRecipe(recipe, state.rigs[recipe.rigId]).length) return false;
+    mutate(s => { s.activeBrew = { id: model.uid('brew'), recipeId, startedAtMs, timeline: [] }; });
+    flush();   // a started brew must survive the app being killed in the next second
+    return true;
+  },
+  brewTap(which, tS) {
+    const brew = state.activeBrew;
+    const sched = brew && scheduleFor(brew.recipeId);
+    if (!sched) return;
+    const next = coachLib.applyTap(sched, brew.timeline, tS, which);
+    if (next.length === brew.timeline.length) return;
+    mutate(s => { s.activeBrew.timeline = next; });
+    flush();   // taps are saved immediately, not after the 400 ms debounce
+    if (coachLib.tapState(sched, next).ended) finishBrew();
+  },
+  undoTap() {
+    if (!state.activeBrew?.timeline.length) return;
+    mutate(s => { s.activeBrew.timeline = coachLib.undoTap(s.activeBrew.timeline); });
+    flush();
+  },
+  discardBrew() {
+    const recipeId = state.activeBrew?.recipeId;
+    if (!recipeId) return;
+    mutate(s => { s.activeBrew = null; });
+    flush();
+    goToEntity('recipes', recipeId);
+  },
 };
+
+// On startup: a brew that already ended (app killed between the final tap and filing it) is
+// filed now; one whose recipe no longer exists is dropped so it can't block new brews.
+function recoverActiveBrew() {
+  const brew = state.activeBrew;
+  if (!brew) return;
+  const sched = scheduleFor(brew.recipeId);
+  if (!sched) {
+    console.warn('[brew] dropped a brew in progress whose recipe no longer exists');
+    mutate(s => { s.activeBrew = null; });
+    flush();
+    return;
+  }
+  if (coachLib.tapState(sched, brew.timeline).ended) finishBrew();
+}
+
+function scheduleFor(recipeId) {
+  const recipe = state.recipes[recipeId];
+  return recipe ? coachLib.schedule(recipe, { rig: state.rigs[recipe.rigId] }) : null;
+}
+
+function localISODate(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// A finished brew goes into that day's practice session, with its analysis computed and stored
+// (shown only after assessment, Step 9). The recipe is now referenced, so it freezes.
+function finishBrew() {
+  const brew = state.activeBrew;
+  const recipe = brew && state.recipes[brew.recipeId];
+  if (!recipe) return;
+  const sched = scheduleFor(recipe.id);
+  const analysis = timelineLib.analyzeBrew(recipe, brew.timeline);
+  const started = new Date(brew.startedAtMs - (sched.startS * 1000));   // wall clock at brew time 0
+  const date = localISODate(started);
+  const sessionId = `session-${date}`;
+  const record = {
+    id: brew.id, sessionId,
+    startedAt: started.toISOString(),
+    recipeId: recipe.id, recipeVersion: recipe.version ?? 1,
+    beanId: recipe.beanId ?? null, rigId: recipe.rigId, waterId: recipe.waterId ?? null,
+    doseG: recipe.doseG ?? null, cueLeadS: sched.cueLeadS,
+    timeline: brew.timeline,
+    endedBy: analysis.endedBy,
+    phases: analysis.phases,
+    plannedPhases: analysis.plannedPhases,
+    drift: analysis.drift,
+    pourDoneUsed: analysis.pourDoneUsed,
+    tapDrift: coachLib.tapDrift(sched, brew.timeline),
+    assessment: null, changedFrom: null, notes: '',
+  };
+  mutate(s => {
+    s.sessions[sessionId] ??= { id: sessionId, date, mode: 'practice', brews: [] };
+    s.sessions[sessionId].brews.push(record);
+    s.activeBrew = null;
+  });
+  flush();
+  navigate(`#/result/${encodeURIComponent(record.id)}`);
+}
 
 // ---------- boot ----------
 
@@ -262,12 +369,13 @@ async function boot() {
     setSaveStatus(false, err);
   }
   if (!state.meta.seeded) seed();
+  recoverActiveBrew();
   render();
   store.requestPersistence().catch(() => {});
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=10').then(m => m.runTests());
+    import('./tests.js?v=11').then(m => m.runTests());
   }
 }
 

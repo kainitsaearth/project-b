@@ -1,8 +1,10 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=10';
-import * as recipeLib from './recipe.js?v=10';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=10';
+import * as model from './model.js?v=11';
+import * as recipeLib from './recipe.js?v=11';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=11';
+import { h, row, fmt, toNum } from './dom.js?v=11';
+import { coachScreen, brewSavedScreen } from './coachScreen.js?v=11';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -13,35 +15,6 @@ const LABELS = {
 
 const ACTION_TITLES = {
   pour: 'Pour', swirl: 'Swirl', cut: 'Cut — lift dripper',
-};
-
-// Tiny element builder. User text always goes in as text nodes, never as HTML.
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v == null || v === false) continue;
-    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k === 'class') el.className = v;
-    else if (k in el && k !== 'list') el[k] = v;
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of children.flat(3)) {
-    if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
-  }
-  return el;
-}
-
-const row = (label, value) => h('div', { class: 'derived-row' },
-  h('span', { class: 'derived-label' }, label),
-  h('span', { class: 'derived-value' }, value));
-
-const fmt = n => String(Math.round(n * 10) / 10);
-
-const toNum = raw => {
-  const t = String(raw).trim();
-  if (t === '') return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
 };
 
 function todayISO() {
@@ -62,12 +35,41 @@ export function createUI(view, tabs, actions) {
   let lastRoute = null;
   let rigPrompt = null;        // { recipeId, rigId, conflicts } — a refused rig switch awaiting a decision
   let scrollToLastStep = false;
+  let coach = null;            // live pour coach: { el, refresh, destroy }
 
   function render(state, route) {
     lastState = state;
     lastRoute = route;
-    renderTabs(route.kind);
     if (rigPrompt && rigPrompt.recipeId !== route.id) rigPrompt = null;
+
+    // The coach owns its screen: tabs hidden, its own frame loop, refreshed (never rebuilt) on taps.
+    const fullScreen = route.kind === 'brew' || route.kind === 'result';
+    tabs.hidden = fullScreen;
+    if (route.kind !== 'brew' && coach) { coach.destroy(); coach = null; }
+    if (route.kind === 'brew') {
+      const key = `brew/${route.id}`;
+      if (coach && mountedKey === key) { coach.refresh(state); return; }
+      coach?.destroy();
+      coach = null;
+      mountedKey = key;
+      refreshDerived = null;
+      const recipe = state.recipes[route.id];
+      if (!recipe) { view.replaceChildren(notFound('recipes')); return; }
+      coach = coachScreen(state, recipe, actions);
+      view.replaceChildren(coach.el);
+      scrollTo(0, 0);
+      return;
+    }
+    if (route.kind === 'result') {
+      const key = `result/${route.id}`;
+      if (mountedKey === key) return;
+      mountedKey = key;
+      refreshDerived = null;
+      view.replaceChildren(brewSavedScreen(state, route.id));
+      scrollTo(0, 0);
+      return;
+    }
+    renderTabs(route.kind);
 
     if (!route.id) {
       mountedKey = null;
@@ -120,7 +122,12 @@ export function createUI(view, tabs, actions) {
     const sorted = Object.values(state[kind]).sort((a, b) =>
       byName(a, b) || (kind === 'recipes' ? (b.version ?? 1) - (a.version ?? 1) : 0));
 
+    const active = kind === 'recipes' && state.activeBrew ? state.recipes[state.activeBrew.recipeId] : null;
+
     return h('section', { class: 'screen' },
+      active ? h('a', { class: 'alert alert-danger resume-brew', id: 'resume-brew', href: `#/brew/${encodeURIComponent(active.id)}` },
+        h('strong', {}, '● Brew in progress'),
+        h('span', {}, `${model.displayName('recipes', active)} — tap to resume`)) : null,
       h('div', { class: 'screen-head' },
         h('h2', {}, plural),
         h('button', { type: 'button', class: 'btn btn-primary', onclick: () => actions.create(kind) }, `+ New ${singular}`)),
@@ -307,6 +314,7 @@ export function createUI(view, tabs, actions) {
       // handled by show/hide in the refresher so the keyboard stays up.
       (r.plan ?? []).map(a => (a.action === 'pour' ? `${a.id}:${a.valve ?? 'open'}` : a.id)),
       rigPrompt?.recipeId === r.id ? rigPrompt.rigId : null,
+      state.activeBrew?.recipeId ?? null,
     ]);
   }
 
@@ -338,6 +346,26 @@ export function createUI(view, tabs, actions) {
     const summaryEl = h('div', { class: 'derived recipe-summary', id: 'recipe-summary' });
     refreshers.push(r => summaryEl.replaceChildren(...recipeSummary(state, r)));
 
+    // Brew: only a complete plan can be coached. Enabled/disabled live while typing.
+    const otherBrew = state.activeBrew && state.activeBrew.recipeId !== recipe.id ? state.recipes[state.activeBrew.recipeId] : null;
+    const brewBtn = h('button', {
+      type: 'button', class: 'btn btn-primary btn-brew', id: 'brew-recipe',
+      onclick: () => { location.hash = `#/brew/${encodeURIComponent(otherBrew ? otherBrew.id : recipe.id)}`; },
+    });
+    const brewHint = h('small', { class: 'field-hint', id: 'brew-hint' });
+    refreshers.push(r => {
+      const ready = recipeLib.validateRecipe(r, state.rigs[r.rigId]).length === 0;
+      if (otherBrew) {
+        brewBtn.textContent = `Resume brew in progress (${model.displayName('recipes', otherBrew)})`;
+        brewBtn.disabled = false;
+        brewHint.textContent = '';
+      } else {
+        brewBtn.textContent = state.activeBrew ? '▶ Resume brew' : '▶ Brew this recipe';
+        brewBtn.disabled = !ready;
+        brewHint.textContent = ready ? '' : 'Fix the plan first.';
+      }
+    });
+
     // Drawdown comes after the last step, so its target sits there too.
     const ddIssues = h('ul', { class: 'issues' });
     const drawdownBlock = h('div', { class: 'drawdown-block', id: 'drawdown-block' },
@@ -363,6 +391,8 @@ export function createUI(view, tabs, actions) {
       h('form', { class: 'form', onsubmit: ev => ev.preventDefault() }, fields),
       h('h3', { class: 'section-title' }, 'Plan'),
       summaryEl,
+      brewBtn,
+      brewHint,
       recipe.plan.length
         ? h('ol', { class: 'steps' }, recipe.plan.map((a, i) => stepCard(state, recipe, rig, a, i, frozen, refreshers)))
         : h('p', { class: 'empty' }, 'No steps yet.'),

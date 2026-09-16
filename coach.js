@@ -43,6 +43,7 @@ export function plannedActions(recipe, rig) {
         volumeMl: a.volumeMl ?? null, cumulativeMl: a.cumulativeMl ?? null,
         tempC: a.tempC ?? null, style: a.style || null, flowRate: a.flowRate ?? null,
         valve: valve ? (closes || a.valveState === 'closed' ? 'closed' : 'open') : null,
+        closesValve: closes,
       });
       if (closes && isNum(a.valveClosedUntilS) && a.valveClosedUntilS > a.atS) {
         list.push({ type: 'open-valve', seq, atS: a.valveClosedUntilS, label: 'OPEN VALVE' });
@@ -138,6 +139,123 @@ export function stateAt(sched, tS) {
     last,
     done: next === null,
   };
+}
+
+// ---------- taps ----------
+//
+// The brew's state is DERIVED from its timeline, never stored beside it. Undo is "drop the
+// last tap", and resuming after Android kills the app is "reload the timeline".
+// Every event carries `tap` (which press made it); planned actions also carry `fire`
+// (index into the schedule's fires) and `plannedAtS`.
+
+const firesOf = sched => (sched?.events ?? []).filter(e => e.kind === 'fire');
+const round2 = t => Math.round(t * 100) / 100;
+
+// → { fireIndex: next planned fire to tap, pourOpen, valve: 'open'|'closed',
+//     valveClosedBy: 'planned' | 'live' | null, ended, endedBy, taps }
+export function tapState(sched, timeline) {
+  let fireIndex = 0;
+  let pourOpen = false;
+  let valve = 'open';
+  let valveClosedBy = null;
+  let ended = false;
+  let endedBy = null;
+  let taps = 0;
+  for (const e of timeline ?? []) {
+    if (!e || ended) continue;
+    if (isNum(e.tap)) taps = Math.max(taps, e.tap);
+    if (Number.isInteger(e.fire)) fireIndex = Math.max(fireIndex, e.fire + 1);
+    if (e.type === 'pour') {
+      pourOpen = true;
+      if (e.valve === 'closed' && valve === 'open') { valve = 'closed'; valveClosedBy = 'planned'; }
+    } else if (e.type === 'pour-done') {
+      pourOpen = false;
+    } else if (Number.isInteger(e.fire)) {
+      pourOpen = false;   // a planned non-pour step: the pour before it is over, end unknown
+    }
+    if (e.type === 'valve') {
+      if (e.state === 'closed' && valve === 'open') { valve = 'closed'; valveClosedBy = e.trigger === 'live' ? 'live' : 'planned'; }
+      else if (e.state === 'open') { valve = 'open'; valveClosedBy = null; }
+    }
+    if (e.type === 'cut') { ended = true; endedBy = 'cut'; }
+    if (e.type === 'drawdown-complete') { ended = true; endedBy = 'drawdown'; }
+  }
+  return { fireIndex, pourOpen, valve, valveClosedBy, ended, endedBy, taps };
+}
+
+// What the big TAP button does right now.
+//   'pour-done'          a pour is running and the next step's countdown hasn't started
+//   'action'             the next planned step (fire), tapped early or late
+//   'drawdown-complete'  every planned step tapped: tap when the bed is dry
+//   'none'               brew ended
+// POUR DONE is optional: once the next countdown starts, the button moves on.
+export function expectedTap(sched, timeline, tS) {
+  const st = tapState(sched, timeline);
+  if (st.ended) return { kind: 'none', label: 'DONE' };
+  const next = firesOf(sched)[st.fireIndex] ?? null;
+  if (st.pourOpen) {
+    const cue = next ? sched.events.find(e => e.kind === 'cue' && e.fireAtS === next.atS) : null;
+    const nextCountdownS = next ? (cue ? cue.atS : next.atS) : Infinity;
+    if (tS < nextCountdownS - EPS) return { kind: 'pour-done', label: 'POUR DONE' };
+  }
+  if (next) return { kind: 'action', label: next.label, fire: next, fireIndex: st.fireIndex };
+  return { kind: 'drawdown-complete', label: 'DRAWDOWN DONE' };
+}
+
+function eventsForAction(a, atS, tap, fire) {
+  const base = { atS, tap, fire, plannedAtS: a.atS };
+  switch (a.type) {
+    case 'pour':
+      return { ...base, type: 'pour', volumeMl: a.volumeMl, tempC: a.tempC, style: a.style, flowRate: a.flowRate,
+        valve: a.closesValve ? 'closed' : 'open' };
+    case 'open-valve': return { ...base, type: 'valve', state: 'open', trigger: 'planned' };
+    case 'swirl': return { ...base, type: 'swirl', count: a.count };
+    case 'cut': return { ...base, type: 'cut' };
+    default: return { ...base, type: a.type };
+  }
+}
+
+// A press, at brew time tS. Returns a NEW timeline; the input is never changed.
+//   which: 'main' (the TAP button) | 'cut' | 'drawdown' | 'valve' (live close/open → lock)
+// After the brew has ended every press is ignored.
+export function applyTap(sched, timeline, tS, which = 'main') {
+  const tl = [...(timeline ?? [])];
+  const st = tapState(sched, tl);
+  if (st.ended || !isNum(tS)) return tl;
+  const tap = st.taps + 1;
+  const atS = round2(tS);
+
+  if (which === 'cut') tl.push({ type: 'cut', atS, tap });
+  else if (which === 'drawdown') tl.push({ type: 'drawdown-complete', atS, tap });
+  else if (which === 'valve') tl.push({ type: 'valve', state: st.valve === 'closed' ? 'open' : 'closed', trigger: 'live', atS, tap });
+  else {
+    const exp = expectedTap(sched, tl, tS);
+    if (exp.kind === 'pour-done') tl.push({ type: 'pour-done', atS, tap });
+    else if (exp.kind === 'drawdown-complete') tl.push({ type: 'drawdown-complete', atS, tap });
+    else if (exp.kind === 'action') for (const a of exp.fire.actions) tl.push(eventsForAction(a, atS, tap, exp.fireIndex));
+  }
+  return tl;
+}
+
+// Removes everything the last press added (a merged step like OPEN VALVE + POUR goes as one).
+export function undoTap(timeline) {
+  const tl = timeline ?? [];
+  const last = tl.reduce((m, e) => (isNum(e?.tap) ? Math.max(m, e.tap) : m), 0);
+  return last === 0 ? [...tl] : tl.filter(e => e?.tap !== last);
+}
+
+// Each tapped planned step: when it was planned vs when it was tapped.
+// → [{ fire, label, plannedAtS, actualAtS, deltaS }]
+export function tapDrift(sched, timeline) {
+  const fires = firesOf(sched);
+  const seen = new Set();
+  const out = [];
+  for (const e of timeline ?? []) {
+    if (!Number.isInteger(e?.fire) || seen.has(e.fire) || !fires[e.fire]) continue;
+    seen.add(e.fire);
+    out.push({ fire: e.fire, label: fires[e.fire].label, plannedAtS: fires[e.fire].atS, actualAtS: e.atS, deltaS: round2(e.atS - fires[e.fire].atS) });
+  }
+  return out;
 }
 
 // Every buzz moment (countdown tick or fire) in (fromS, toS], in order.

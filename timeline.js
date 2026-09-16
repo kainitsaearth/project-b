@@ -9,11 +9,13 @@
 // The brew starts at the first pour and ends at the FIRST of `cut` or `drawdown-complete`.
 // A phase exists only if events produced it: a V60 brew never has a `steep` key.
 //
-// Known limit: only a pour's START is tapped, so the last pour's pouring time counts
-// toward drawdown.
+// POUR DONE (optional): a `pour-done` tap after the LAST pour moves the start of drawdown to
+// when pouring actually stopped; the pouring time becomes percolation. Without it, drawdown
+// starts at the last pour's start. Pour-done on earlier pours is kept but changes no phase.
 //
 // TimelineEvent =
 //     { atS, type: 'pour', volumeMl, tempC, style, valve }   valve 'closed' closes it
+//   | { atS, type: 'pour-done' }                             pouring stopped (optional)
 //   | { atS, type: 'valve', state: 'open' | 'closed', trigger }
 //   | { atS, type: 'swirl', count }
 //   | { atS, type: 'cut' }                                   dripper lifted — a decision
@@ -51,7 +53,9 @@ function orderEvents(timeline) {
 //     segments: [{ phase, startS, endS, durationS }],
 //     closures: [{ closeAtS, openAtS, kind: 'steep' | 'lock', durationS }],
 //     ignored, ignoredAfterEnd }
-export function segmentTimeline(timeline, plannedClosures = []) {
+// options.usePourDone (default true): false measures drawdown from the last pour's START,
+// the only convention a plan can follow (plans don't know pour durations).
+export function segmentTimeline(timeline, plannedClosures = [], { usePourDone = true } = {}) {
   const { events, ignored } = orderEvents(timeline);
 
   const endIndex = events.findIndex(e => e.type === 'cut' || e.type === 'drawdown-complete');
@@ -63,11 +67,17 @@ export function segmentTimeline(timeline, plannedClosures = []) {
 
   const pours = inScope.filter(e => e.type === 'pour');
   if (pours.length === 0) {
-    return { complete: false, endedBy, startS: null, endS, totalS: null, phases: {}, segments: [], closures: [], ignored, ignoredAfterEnd };
+    return { complete: false, endedBy, startS: null, endS, totalS: null, lastPourS: null, lastPourEndS: null, pourDoneUsed: false,
+      phases: {}, segments: [], closures: [], ignored, ignoredAfterEnd };
   }
   const startS = pours[0].atS;
   const pour2S = pours.length >= 2 ? pours[1].atS : null;
-  const lastPourS = pours[pours.length - 1].atS;
+  const lastPour = pours[pours.length - 1];
+  const lastPourS = lastPour.atS;
+  const doneTap = usePourDone
+    ? inScope.slice(inScope.indexOf(lastPour) + 1).find(e => e.type === 'pour-done' && e.atS > lastPourS)
+    : null;
+  const lastPourEndS = doneTap ? doneTap.atS : lastPourS;
 
   // Valve closures. A closed pour or a valve-closed event closes; only a valve-open event opens.
   // (A pour marked "open" while the valve is shut is a pour inside a steep, not an opening.)
@@ -100,13 +110,13 @@ export function segmentTimeline(timeline, plannedClosures = []) {
     const c = closures.find(x => x.closeAtS <= t && (x.openAtS === null || t < x.openAtS));
     if (c) return c.kind;
     if (pour2S !== null && t < pour2S) return 'bloom';
-    if (t < lastPourS) return 'percolation';
+    if (t < lastPourEndS) return 'percolation';
     return 'drawdown';
   };
 
   // Cut time into intervals at every boundary, label each, merge neighbours.
   const inRange = t => isNum(t) && t >= startS && (endS === null || t <= endS);
-  const bounds = [...new Set([startS, pour2S, lastPourS, ...closures.flatMap(c => [c.closeAtS, c.openAtS]), endS].filter(inRange))]
+  const bounds = [...new Set([startS, pour2S, lastPourS, lastPourEndS, ...closures.flatMap(c => [c.closeAtS, c.openAtS]), endS].filter(inRange))]
     .sort((a, b) => a - b);
 
   const raw = [];
@@ -142,6 +152,8 @@ export function segmentTimeline(timeline, plannedClosures = []) {
     complete: endS !== null,
     endedBy, startS, endS,
     totalS: endS === null ? null : endS - startS,
+    lastPourS, lastPourEndS: endS === null ? lastPourEndS : Math.min(lastPourEndS, endS),
+    pourDoneUsed: Boolean(doneTap) && (endS === null || doneTap.atS <= endS),
     phases, segments, closures: closuresOut,
     ignored, ignoredAfterEnd,
   };
@@ -215,17 +227,27 @@ function judge(planS, actualS, limitS, { live = false, cut = false } = {}) {
 // ---------- one call for a brew ----------
 
 // recipe: normalized recipe or null (blank slate — then every closure is a lock, nothing is judged)
+//
+// `phases` is what really happened (drawdown from POUR DONE when tapped).
+// `drift` compares like with like: the plan can't know pour durations, so drift measures
+// drawdown from the last pour's START on both sides (`comparablePhases`). Otherwise every
+// brew with a POUR DONE tap would read "drawdown short" by exactly its pouring time.
 export function analyzeBrew(recipe, timeline, tolerance = {}) {
   const plan = recipe ? planToTimeline(recipe) : { events: [], closures: [] };
   const planned = recipe ? segmentTimeline(plan.events, plan.closures) : null;
   const actual = segmentTimeline(timeline, plan.closures);
+  const comparable = actual.pourDoneUsed ? segmentTimeline(timeline, plan.closures, { usePourDone: false }) : actual;
   return {
     endedBy: actual.endedBy,
     complete: actual.complete,
     phases: actual.phases,
     segments: actual.segments,
     closures: actual.closures,
+    pourDoneUsed: actual.pourDoneUsed,
+    lastPourS: actual.lastPourS,
+    lastPourEndS: actual.lastPourEndS,
     plannedPhases: planned ? planned.phases : null,
-    drift: phaseDrift(planned, actual, tolerance),
+    comparablePhases: comparable.phases,
+    drift: phaseDrift(planned, comparable, tolerance),
   };
 }

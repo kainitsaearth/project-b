@@ -1,11 +1,11 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=10';
-import * as model from './model.js?v=10';
-import * as R from './recipe.js?v=10';
-import * as T from './timeline.js?v=10';
-import * as C from './coach.js?v=10';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=11';
+import * as model from './model.js?v=11';
+import * as R from './recipe.js?v=11';
+import * as T from './timeline.js?v=11';
+import * as C from './coach.js?v=11';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -692,6 +692,130 @@ export function runTests(log = console) {
       C.schedule(y, { rig: switchR });
       eq('pure: schedule does not mutate the recipe', JSON.stringify(y), copy);
     }
+  }
+
+  // ================= pour done (timeline.js) =================
+  {
+    const pour = (atS, extra = {}) => ({ type: 'pour', atS, volumeMl: 50, valve: 'open', ...extra });
+    const v60 = [pour(0), pour(45), pour(80)];
+    const base = T.segmentTimeline([...v60, { type: 'drawdown-complete', atS: 180 }]);
+    const withDone = T.segmentTimeline([...v60, { type: 'pour-done', atS: 95 }, { type: 'drawdown-complete', atS: 180 }]);
+    eq('pour done: drawdown starts when pouring stopped (1:35), pouring time is percolation',
+      [withDone.phases, withDone.pourDoneUsed, withDone.lastPourEndS], [{ bloom: 45, percolation: 50, drawdown: 85 }, true, 95]);
+    eq('pour done: without it, drawdown starts at the pour start', [base.phases.drawdown, base.pourDoneUsed], [100, false]);
+    eq('pour done: usePourDone:false ignores it', T.segmentTimeline([...v60, { type: 'pour-done', atS: 95 }, { type: 'drawdown-complete', atS: 180 }], [], { usePourDone: false }).phases, base.phases);
+    eq('pour done: on an earlier pour changes nothing',
+      T.segmentTimeline([pour(0), { type: 'pour-done', atS: 10 }, pour(45), pour(80), { type: 'drawdown-complete', atS: 180 }]).phases, base.phases);
+    eq('pour done: single pour → percolation while pouring, then drawdown',
+      T.segmentTimeline([pour(0), { type: 'pour-done', atS: 20 }, { type: 'drawdown-complete', atS: 90 }]).phases, { percolation: 20, drawdown: 70 });
+    eq('pour done: after the end is ignored',
+      T.segmentTimeline([...v60, { type: 'cut', atS: 120 }, { type: 'pour-done', atS: 125 }]).pourDoneUsed, false);
+    eq('pour done: phases still sum to the total', Object.values(withDone.phases).reduce((a, b) => a + b, 0), withDone.totalS);
+
+    const plan = R.normalizeRecipe(model.createRecipe({ rigId: 'r', targetDrawdownEndS: 180, plan: [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 50, valve: 'open' },
+      { id: 'b', action: 'pour', atS: 45, volumeMl: 100, valve: 'open' },
+      { id: 'c', action: 'pour', atS: 80, volumeMl: 60, valve: 'open' },
+    ] }));
+    const aDone = T.analyzeBrew(plan, [...v60, { type: 'pour-done', atS: 95 }, { type: 'drawdown-complete', atS: 180 }]);
+    const aPlain = T.analyzeBrew(plan, [...v60, { type: 'drawdown-complete', atS: 180 }]);
+    eq('pour done: the result shows the real drawdown (1:25)', aDone.phases.drawdown, 85);
+    eq('pour done: drift compares like with like, so it is NOT flagged short by the pouring time',
+      [aDone.drift.phases.drawdown.flag, aDone.drift.phases.drawdown.deltaS], ['on', 0]);
+    eq('pour done: drift is identical with or without the tap', JSON.stringify(aDone.drift), JSON.stringify(aPlain.drift));
+  }
+
+  // ================= taps (coach.js) =================
+  {
+    const switchR = switchRig();
+    const yuan = yuanRecipe();
+    const sched = C.schedule(yuan, { rig: switchR });
+    const label = (tl, t) => C.expectedTap(sched, tl, t).label;
+
+    // A whole Yuan brew, press by press
+    let tl = [];
+    const press = (t, expectLabel, which = 'main') => {
+      if (which === 'main') eq(`tap @${t}: button says ${expectLabel}`, label(tl, t), expectLabel);
+      tl = C.applyTap(sched, tl, t, which);
+    };
+    eq('tap: before anything, the button is the first step', label([], -3), 'CLOSE VALVE + POUR');
+    press(0.4, 'CLOSE VALVE + POUR');
+    eq('tap: the closing pour is stamped closed, with its plan time', [tl[0].type, tl[0].valve, tl[0].atS, tl[0].plannedAtS, tl[0].fire, tl[0].tap], ['pour', 'closed', 0.4, 0, 0, 1]);
+    press(12, 'POUR DONE');
+    eq('tap: after POUR DONE the next step waits for its countdown', label(tl, 20), 'OPEN VALVE');
+    press(40.2, 'OPEN VALVE');
+    press(45, 'POUR');
+    eq('tap: POUR DONE offered while pouring…', label(tl, 60), 'POUR DONE');
+    eq('tap: …and skipped once the next countdown starts (0:77)', label(tl, 77.5), 'POUR');
+    press(79.5, 'POUR');   // pour done skipped
+    press(94, 'POUR DONE');
+    press(100, '', 'valve');   // live close
+    eq('tap: live valve close is stamped as live', [tl[tl.length - 1].type, tl[tl.length - 1].state, tl[tl.length - 1].trigger], ['valve', 'closed', 'live']);
+    press(104, '', 'valve');   // live open
+    press(111, 'SWIRL ×1');
+    press(150.3, 'LIFT DRIPPER');
+    eq('tap: after the cut, the button is DONE', label(tl, 151), 'DONE');
+    const frozen = JSON.stringify(tl);
+    eq('tap: presses after the end change nothing', JSON.stringify(C.applyTap(sched, tl, 160)), frozen);
+
+    // Who closed the valve decides whether the live valve button may appear
+    const closedByAt = n => C.tapState(sched, tl.filter(e => e.tap <= n)).valveClosedBy;
+    eq('valve: after CLOSE VALVE + POUR it is closed by the plan', closedByAt(1), 'planned');
+    eq('valve: OPEN VALVE clears it', closedByAt(3), null);
+    eq('valve: a live close is closed by "live"', closedByAt(7), 'live');
+    eq('valve: releasing the lock clears it', closedByAt(8), null);
+
+    const st = C.tapState(sched, tl);
+    eq('tap: state after the brew', [st.ended, st.endedBy, st.fireIndex, st.pourOpen, st.valve], [true, 'cut', 6, false, 'open']);
+    const a = T.analyzeBrew(yuan, tl);
+    eq('tap: the tapped timeline analyses cleanly', [a.endedBy, a.closures.map(c => c.kind), a.pourDoneUsed], ['cut', ['steep', 'lock'], true]);
+    eq('tap: real drawdown from POUR DONE (1:34) minus the 4 s lock', a.phases.drawdown, 150.3 - 94 - 4);
+    near('tap: steep 0:39.8 (tapped 0:00.4 → 0:40.2)', a.drift.phases.steep.actualS, 39.8, 1e-6);
+    eq('tap: steep → on', a.drift.phases.steep.flag, 'on');
+    eq('tap: per-step timing vs plan', C.tapDrift(sched, tl).map(d => `${d.label} ${d.deltaS}`),
+      ['CLOSE VALVE + POUR 0.4', 'OPEN VALVE 0.2', 'POUR 0', 'POUR -0.5', 'SWIRL ×1 1', 'LIFT DRIPPER 0.3']);
+
+    // Undo
+    const beforeSwirl = C.undoTap(C.undoTap(tl));   // drop LIFT DRIPPER, then SWIRL
+    eq('undo: removes one press at a time', [label(beforeSwirl, 111), C.tapState(sched, beforeSwirl).ended], ['SWIRL ×1', false]);
+    const merged = R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 45 },
+      { id: 'b', action: 'pour', atS: 45, volumeMl: 100, valve: 'open' },
+    ] }));
+    const ms = C.schedule(merged, { rig: switchR });
+    let mt = C.applyTap(ms, [], 0);
+    mt = C.applyTap(ms, mt, 45);
+    eq('merged: OPEN VALVE + POUR is one press → valve then pour, same time', mt.slice(1).map(e => `${e.type}@${e.atS}#${e.tap}`), ['valve@45#2', 'pour@45#2']);
+    eq('undo: a merged press goes as one', C.undoTap(mt).length, 1);
+    eq('undo: empty timeline stays empty', C.undoTap([]), []);
+
+    // Ending without a planned cut
+    const v60Plan = R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 50, valve: 'open' },
+      { id: 'b', action: 'pour', atS: 45, volumeMl: 150, valve: 'open' },
+    ] }));
+    const vs = C.schedule(v60Plan, { rig: v60Rig() });
+    let vt = C.applyTap(vs, [], 0);
+    vt = C.applyTap(vs, vt, 45);
+    eq('end: last pour running, no more steps → POUR DONE', C.expectedTap(vs, vt, 200).label, 'POUR DONE');
+    vt = C.applyTap(vs, vt, 70);
+    eq('end: then DRAWDOWN DONE', C.expectedTap(vs, vt, 71).label, 'DRAWDOWN DONE');
+    vt = C.applyTap(vs, vt, 160);
+    eq('end: which ends the brew naturally', C.tapState(vs, vt).endedBy, 'drawdown');
+    eq('end: CUT works any time', C.tapState(vs, C.applyTap(vs, [C.applyTap(vs, [], 0)[0]], 30, 'cut')).endedBy, 'cut');
+    eq('end: DRAWDOWN DONE button works any time', C.tapState(vs, C.applyTap(vs, [], 30, 'drawdown')).endedBy, 'drawdown');
+
+    // Early / late taps, rounding, purity
+    // While pour 1 runs and pour 2's countdown (0:42) hasn't started, the button is POUR DONE.
+    eq('tap: pressing at 0:41 during pour 1 means POUR DONE, not pour 2', C.applyTap(vs, C.applyTap(vs, [], 0), 41.237)[1].type, 'pour-done');
+    const early = C.applyTap(vs, C.applyTap(vs, C.applyTap(vs, [], 0), 10), 41.237);
+    eq('tap: pour 2 tapped early stamps the real time, rounded to 0.01 s', [early[2].type, early[2].atS, early[2].plannedAtS], ['pour', 41.24, 45]);
+    const input = C.applyTap(vs, [], 0);
+    const copy = JSON.stringify(input);
+    C.applyTap(vs, input, 10);
+    C.undoTap(input);
+    eq('pure: applyTap and undoTap never change the timeline passed in', JSON.stringify(input), copy);
+    eq('tap: nothing happens without a valid time', C.applyTap(vs, [], NaN), []);
   }
 
   // ---- model ----
