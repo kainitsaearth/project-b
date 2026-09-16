@@ -74,11 +74,17 @@ export function formatClock(seconds) {
 
 const stepEnd = a => (a.action === 'steep' ? a.atS + (isNum(a.durationS) ? a.durationS : 0) : a.atS);
 
+export const FLOW_RATE_MIN = 1;
+export const FLOW_RATE_MAX = 10;
+
 // ---------- derived fields ----------
 
 // Recomputes everything derived from the plan. Never typed by hand:
 //   seq, cumulativeMl (what the scale reads), totalWaterMl,
-//   targetRatio (water in ÷ dose, the N in 1:N), targetTotalTimeS (end of the latest step).
+//   targetRatio (water in ÷ dose, the N in 1:N),
+//   targetTotalTimeS — a planned cut ends the brew, so it is the cut time.
+//     Otherwise the later of the last step's end and the target drawdown end.
+//     targetDrawdownEndS is a prediction (drawdown can't be controlled), and optional.
 // One unreadable pour volume makes that pour's cumulative and every later one null —
 // a scale target built on a guess is worse than a blank.
 export function normalizeRecipe(recipe) {
@@ -101,7 +107,13 @@ export function normalizeRecipe(recipe) {
   const hasPour = plan.some(a => a.action === 'pour');
   const totalWaterMl = hasPour && !broken ? running : null;
   const allTimed = plan.length > 0 && plan.every(a => isNum(a.atS));
-  const targetTotalTimeS = allTimed ? Math.max(...plan.map(stepEnd)) : null;
+  const cut = plan.find(a => a.action === 'cut');
+  const drawdownEnd = isNum(recipe.targetDrawdownEndS) && recipe.targetDrawdownEndS >= 0 ? recipe.targetDrawdownEndS : null;
+  let targetTotalTimeS = null;
+  if (allTimed) {
+    const lastEnd = Math.max(...plan.map(stepEnd));
+    targetTotalTimeS = cut ? cut.atS : Math.max(lastEnd, drawdownEnd ?? lastEnd);
+  }
   const targetRatio = totalWaterMl !== null && isNum(recipe.doseG) && recipe.doseG > 0
     ? totalWaterMl / recipe.doseG : null;
 
@@ -124,6 +136,7 @@ export function validateRecipe(recipe, rig) {
     for (const c of rigConflicts(plan, rig)) issues.push({ step: c.step, stepId: c.stepId, message: c.message });
   }
 
+  const firstCut = plan.findIndex(a => a.action === 'cut');
   let prevAt = null;
   plan.forEach((a, i) => {
     const step = i + 1;
@@ -134,13 +147,31 @@ export function validateRecipe(recipe, rig) {
       if (prevAt !== null && a.atS < prevAt) add('starts before the step above it');
       prevAt = a.atS;
     }
+    if (firstCut >= 0 && i > firstCut) add('comes after the cut — the dripper is already off');
     if (a.action === 'pour') {
       if (!(isNum(a.volumeMl) && a.volumeMl > 0)) add('volume missing');
       if (a.tempC != null && !(isNum(a.tempC) && a.tempC > 0 && a.tempC <= 100)) add('temperature must be 1–100 °C');
+      if (a.flowRate != null && !(Number.isInteger(a.flowRate) && a.flowRate >= FLOW_RATE_MIN && a.flowRate <= FLOW_RATE_MAX)) {
+        add(`flow rate must be a whole number ${FLOW_RATE_MIN}–${FLOW_RATE_MAX}`);
+      }
     }
     if (a.action === 'steep' && !(isNum(a.durationS) && a.durationS > 0)) add('steep duration missing');
     if (a.action === 'swirl' && !(Number.isInteger(a.count) && a.count >= 1)) add('swirl count must be a whole number, 1 or more');
   });
+
+  // Target drawdown end: optional prediction. When set it must fit the plan.
+  const dd = recipe.targetDrawdownEndS;
+  if (dd != null) {
+    const addDd = message => issues.push({ step: null, field: 'targetDrawdownEndS', message });
+    const lastPour = [...plan].reverse().find(a => a.action === 'pour' && isNum(a.atS));
+    const cut = plan[firstCut];
+    if (!isNum(dd) || dd < 0) addDd('Target drawdown end is not a valid time.');
+    else if (lastPour && dd <= lastPour.atS) {
+      addDd(`Target drawdown end (${formatClock(dd)}) must be after the last pour (${formatClock(lastPour.atS)}).`);
+    } else if (cut && isNum(cut.atS) && cut.atS >= dd) {
+      addDd(`The cut (${formatClock(cut.atS)}) is at or after the target drawdown end (${formatClock(dd)}) — nothing would be left to cut.`);
+    }
+  }
 
   return issues;
 }

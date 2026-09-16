@@ -266,4 +266,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 
 input:disabled, select:disabled, textarea:disabled { opacity: .7; }
 
+input.invalid { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+
+.drawdown-block {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-left: 4px dashed var(--muted);
+  border-radius: var(--radius);
+}
+.drawdown-block.has-issues { border-left-color: var(--danger); }
+
 [hidden] { display: none !important; }

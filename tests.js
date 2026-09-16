@@ -1,9 +1,9 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=4';
-import * as model from './model.js?v=4';
-import * as R from './recipe.js?v=4';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=6';
+import * as model from './model.js?v=6';
+import * as R from './recipe.js?v=6';
 
 // Plan Step 4's test recipe: 50 g closed → release → 100 g → 60 g @ 84 °C → swirl ×1 → cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -210,6 +210,48 @@ export function runTests(log = console) {
       'Step 6 (cut): time missing (seconds, or m:ss)',
     ]);
     eq('validate: equal times are allowed', msgs({ ...y, plan: y.plan.map(a => (a.id === 's3' ? { ...a, atS: 40 } : a)) }), []);
+  }
+
+  // ---- recipe: target drawdown end ----
+  {
+    const y = yuanRecipe();
+    const msgs = recipe => R.validateRecipe(recipe, switchRig()).map(x => x.message);
+    const noCut = { ...y, plan: y.plan.filter(a => a.action !== 'cut') };
+
+    eq('drawdown: optional — unset is not an issue', msgs(y), []);
+    eq('drawdown: new recipes start unset', model.createRecipe().targetDrawdownEndS, null);
+    eq('drawdown: no cut → total time is the drawdown end', R.normalizeRecipe({ ...noCut, targetDrawdownEndS: 180 }).targetTotalTimeS, 180);
+    eq('drawdown: no cut, unset → total time is the last step', R.normalizeRecipe(noCut).targetTotalTimeS, 110);
+    // Step 5 test 4's setup: cut at 150, drawdown planned to 180 — a legitimate plan
+    eq('drawdown: planned cut 2:30 + drawdown 3:00 is valid', msgs({ ...y, targetDrawdownEndS: 180 }), []);
+    eq('drawdown: a planned cut ends the brew → total time = cut', R.normalizeRecipe({ ...y, targetDrawdownEndS: 180 }).targetTotalTimeS, 150);
+    eq('drawdown: must be after the last pour', msgs({ ...noCut, targetDrawdownEndS: 80 }),
+      ['Target drawdown end (1:20) must be after the last pour (1:20).']);
+    eq('drawdown: cut at/after it leaves nothing to cut', msgs({ ...y, targetDrawdownEndS: 140 }),
+      ['The cut (2:30) is at or after the target drawdown end (2:20) — nothing would be left to cut.']);
+    eq('drawdown: negative is invalid', msgs({ ...y, targetDrawdownEndS: -5 }), ['Target drawdown end is not a valid time.']);
+    eq('drawdown: issue carries its field for the UI', R.validateRecipe({ ...y, targetDrawdownEndS: -5 }, switchRig())[0].field, 'targetDrawdownEndS');
+    eq('drawdown: survives a fork', R.forkRecipe({ ...y, targetDrawdownEndS: 180 }, 'f', []).targetDrawdownEndS, 180);
+
+    const afterCut = structuredClone(y);
+    afterCut.plan.push({ id: 's7', action: 'pour', atS: 160, volumeMl: 20, valve: 'open' });
+    eq('cut: a step after the cut is flagged', msgs(afterCut), ['Step 7 (pour): comes after the cut — the dripper is already off']);
+  }
+
+  // ---- recipe: pour flow rate 1–10 ----
+  {
+    const y = yuanRecipe();
+    const withFlow = flowRate => ({ ...y, plan: y.plan.map(a => (a.id === 's3' ? { ...a, flowRate } : a)) });
+    const msgs = recipe => R.validateRecipe(recipe, switchRig()).map(x => x.message);
+    eq('flow rate: optional — unset is fine', msgs(withFlow(null)), []);
+    eq('flow rate: 1 and 10 are valid', [msgs(withFlow(1)), msgs(withFlow(10))], [[], []]);
+    for (const bad of [0, 11, 5.5, -1]) {
+      eq(`flow rate: ${bad} rejected`, msgs(withFlow(bad)), ['Step 3 (pour): flow rate must be a whole number 1–10']);
+    }
+    eq('flow rate: first pour starts unset', model.createAction('pour').flowRate, null);
+    eq('flow rate: next pour inherits it', model.createAction('pour', [{ action: 'pour', atS: 0, flowRate: 7 }]).flowRate, 7);
+    eq('flow rate: only pours carry it', 'flowRate' in model.createAction('swirl'), false);
+    eq('flow rate: survives adapting to a V60', R.adaptPlanToRig(withFlow(4).plan, v60Rig()).find(a => a.id === 's3').flowRate, 4);
   }
 
   // ---- recipe: clock ----

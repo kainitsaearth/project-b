@@ -1,8 +1,8 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=4';
-import * as recipeLib from './recipe.js?v=4';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=4';
+import * as model from './model.js?v=6';
+import * as recipeLib from './recipe.js?v=6';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=6';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -242,6 +242,8 @@ export function createUI(view, tabs, actions) {
         h('option', { value: '', selected: current === '' }, f.empty),
         current && !state[f.ref][current] ? h('option', { value: current, selected: true }, '(deleted)') : null,
         options.map(o => h('option', { value: o.id, selected: o.id === current }, model.displayName(f.ref, o))));
+    } else if (f.type === 'clock') {
+      control = clockInput(id, entity[f.key], disabled, set);
     } else if (f.type === 'number') {
       control = h('input', {
         id, disabled, type: 'number', inputMode: 'decimal', step: 'any', value: entity[f.key] ?? '',
@@ -260,6 +262,27 @@ export function createUI(view, tabs, actions) {
       control,
       f.suggestions ? h('datalist', { id: `${id}-list` }, f.suggestions.map(s => h('option', { value: s }))) : null,
       hint);
+  }
+
+  // Time as seconds, m:ss or m.ss. Unreadable text is saved as "no time" and the
+  // input turns red, so a typo never looks the same as a deliberately empty field.
+  function clockInput(id, seconds, disabled, set) {
+    return h('input', {
+      id, type: 'text', inputMode: 'decimal', placeholder: 'm:ss', class: 'clock', autocomplete: 'off',
+      value: recipeLib.formatClock(seconds), disabled,
+      oninput: ev => {
+        const raw = ev.target.value;
+        const s = recipeLib.parseClock(raw);
+        const invalid = raw.trim() !== '' && s === null;
+        ev.target.classList.toggle('invalid', invalid);
+        ev.target.setAttribute('aria-invalid', String(invalid));
+        set(s);
+      },
+      onchange: ev => {
+        const s = recipeLib.parseClock(ev.target.value);
+        if (s !== null) ev.target.value = recipeLib.formatClock(s);
+      },
+    });
   }
 
   // ---------- recipe editor ----------
@@ -292,7 +315,7 @@ export function createUI(view, tabs, actions) {
     const refreshers = [];
     refreshDerived = r => refreshers.forEach(fn => fn(r));
 
-    const fields = model.FIELDS.recipes.map(f => {
+    const fields = model.FIELDS.recipes.filter(f => f.section !== 'plan').map(f => {
       if (f.key !== 'rigId') return field(state, 'recipes', recipe, f, { disabled: frozen });
       return [
         field(state, 'recipes', recipe, f, { disabled: frozen, onSet: v => requestRigChange(recipe.id, v) }),
@@ -302,6 +325,18 @@ export function createUI(view, tabs, actions) {
 
     const summaryEl = h('div', { class: 'derived recipe-summary', id: 'recipe-summary' });
     refreshers.push(r => summaryEl.replaceChildren(...recipeSummary(state, r)));
+
+    // Drawdown comes after the last step, so its target sits there too.
+    const ddIssues = h('ul', { class: 'issues' });
+    const drawdownBlock = h('div', { class: 'drawdown-block', id: 'drawdown-block' },
+      model.FIELDS.recipes.filter(f => f.section === 'plan').map(f => field(state, 'recipes', recipe, f, { disabled: frozen })),
+      ddIssues);
+    refreshers.push(r => {
+      const own = recipeLib.validateRecipe(r, state.rigs[r.rigId]).filter(x => x.field === 'targetDrawdownEndS');
+      ddIssues.replaceChildren(...own.map(x => h('li', {}, x.message)));
+      ddIssues.hidden = own.length === 0;
+      drawdownBlock.classList.toggle('has-issues', own.length > 0);
+    });
 
     const el = h('section', { class: 'screen' },
       h('a', { class: 'back', href: '#/recipes' }, '‹ Recipes'),
@@ -319,6 +354,7 @@ export function createUI(view, tabs, actions) {
       recipe.plan.length
         ? h('ol', { class: 'steps' }, recipe.plan.map((a, i) => stepCard(state, recipe, rig, a, i, frozen, refreshers)))
         : h('p', { class: 'empty' }, 'No steps yet.'),
+      drawdownBlock,
       frozen ? null : addStepBar(recipe, rig),
       h('datalist', { id: 'pour-styles' }, model.POUR_STYLES.map(s => h('option', { value: s }))),
       frozen ? null : deleteButton('recipes', recipe));
@@ -351,6 +387,7 @@ export function createUI(view, tabs, actions) {
     return [
       row('Total water', r.totalWaterMl != null ? `${fmt(r.totalWaterMl)} ml` : '—'),
       row('Brew ratio', r.targetRatio != null ? `1:${r.targetRatio.toFixed(1)}` : '—'),
+      row('Drawdown end', r.targetDrawdownEndS != null ? recipeLib.formatClock(r.targetDrawdownEndS) : 'not set'),
       row('Total time', r.targetTotalTimeS != null ? recipeLib.formatClock(r.targetTotalTimeS) : '—'),
       issues.length
         ? h('ul', { class: 'issues', id: 'recipe-issues' }, issues.map(x => h('li', {}, x.message)))
@@ -370,15 +407,7 @@ export function createUI(view, tabs, actions) {
     const iconBtn = (text, label, disabled, onclick) =>
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label, disabled, onclick }, text);
 
-    const clock = labeled('At', h('input', {
-      id: inputId('atS'), type: 'text', inputMode: 'decimal', placeholder: 'm:ss', class: 'clock',
-      value: recipeLib.formatClock(a.atS), disabled: frozen,
-      oninput: ev => set('atS', recipeLib.parseClock(ev.target.value)),
-      onchange: ev => {
-        const s = recipeLib.parseClock(ev.target.value);
-        if (s !== null) ev.target.value = recipeLib.formatClock(s);
-      },
-    }));
+    const clock = labeled('At', clockInput(inputId('atS'), a.atS, frozen, s => set('atS', s)));
 
     let body = [];
     if (a.action === 'pour') {
@@ -389,6 +418,15 @@ export function createUI(view, tabs, actions) {
           id: inputId('style'), type: 'text', list: 'pour-styles', autocomplete: 'off',
           value: a.style ?? '', disabled: frozen, oninput: ev => set('style', ev.target.value),
         })),
+        labeled('Flow rate', h('select', {
+          id: inputId('flowRate'), disabled: frozen, onchange: ev => set('flowRate', toNum(ev.target.value)),
+        },
+          h('option', { value: '', selected: a.flowRate == null }, '—'),
+          Array.from({ length: recipeLib.FLOW_RATE_MAX - recipeLib.FLOW_RATE_MIN + 1 }, (_, k) => {
+            const v = recipeLib.FLOW_RATE_MIN + k;
+            const label = v === recipeLib.FLOW_RATE_MIN ? `${v} low` : v === recipeLib.FLOW_RATE_MAX ? `${v} high` : String(v);
+            return h('option', { value: String(v), selected: a.flowRate === v }, label);
+          }))),
         rig?.valveCapable || a.valve === 'closed'
           ? labeled('Valve', h('select', { id: inputId('valve'), disabled: frozen, onchange: ev => set('valve', ev.target.value) },
               ['open', 'closed'].map(v => h('option', { value: v, selected: (a.valve ?? 'open') === v }, v))))

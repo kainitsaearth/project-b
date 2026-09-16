@@ -3,10 +3,10 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=4';
-import * as model from './model.js?v=4';
-import * as recipeLib from './recipe.js?v=4';
-import { createUI } from './ui.js?v=4';
+import * as store from './store.js?v=6';
+import * as model from './model.js?v=6';
+import * as recipeLib from './recipe.js?v=6';
+import { createUI } from './ui.js?v=6';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -252,7 +252,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=4').then(m => m.runTests());
+    import('./tests.js?v=6').then(m => m.runTests());
   }
 }
 

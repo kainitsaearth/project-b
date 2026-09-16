@@ -1,7 +1,7 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-import { allowedActions, ALL_ACTIONS } from './recipe.js?v=4';
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=6';
 
 // Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
 export { allowedActions, ALL_ACTIONS };
@@ -49,6 +49,7 @@ export function createRecipe(o = {}) {
     beanId: null, rigId: null, waterId: null,
     doseG: null, targetOutputMl: null, cueLeadS: 3,
     plan: [],
+    targetDrawdownEndS: null,  // optional prediction; drawdown can't be controlled exactly
     // derived by recipe.normalizeRecipe — never typed
     totalWaterMl: null, targetRatio: null, targetTotalTimeS: null,
     ...o, id,
@@ -70,7 +71,9 @@ export function createAction(action, plan = []) {
   switch (action) {
     case 'pour':
       return { ...base, volumeMl: null, cumulativeMl: null,
-        tempC: lastPour?.tempC ?? 93, style: lastPour?.style ?? '', valve: 'open' };
+        tempC: lastPour?.tempC ?? 93, style: lastPour?.style ?? '',
+        flowRate: lastPour?.flowRate ?? null,  // flow rate: 1 = low … 10 = high; optional
+        valve: 'open' };
     case 'steep': return { ...base, durationS: 30 };
     case 'swirl': return { ...base, count: 1 };
     default: return base; // release, cut
@@ -118,6 +121,10 @@ export const FIELDS = {
     { key: 'doseG', label: 'Dose (g)', type: 'number' },
     { key: 'targetOutputMl', label: 'Target output (ml)', type: 'number' },
     { key: 'cueLeadS', label: 'Cue lead (s)', type: 'number', hint: 'Warning before each step in the pour coach.' },
+    // Rendered in the Plan section after the last step, where drawdown happens.
+    { key: 'targetDrawdownEndS', label: 'Target drawdown end', type: 'clock', section: 'plan',
+      hint: "When you expect the bed to finish draining. You can't control it exactly. "
+        + "Set it from past brews of this bean. Optional: without it, drawdown drift isn't judged." },
   ],
   waters: [
     { key: 'name', label: 'Name', placeholder: 'e.g. OMB 75 ppm' },
