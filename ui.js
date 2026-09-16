@@ -1,8 +1,8 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=9';
-import * as recipeLib from './recipe.js?v=9';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=9';
+import * as model from './model.js?v=10';
+import * as recipeLib from './recipe.js?v=10';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=10';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],

@@ -1,7 +1,7 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-import { allowedActions, ALL_ACTIONS } from './recipe.js?v=9';
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=10';
 
 // Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
 export { allowedActions, ALL_ACTIONS };

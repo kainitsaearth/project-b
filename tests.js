@@ -1,10 +1,11 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=9';
-import * as model from './model.js?v=9';
-import * as R from './recipe.js?v=9';
-import * as T from './timeline.js?v=9';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=10';
+import * as model from './model.js?v=10';
+import * as R from './recipe.js?v=10';
+import * as T from './timeline.js?v=10';
+import * as C from './coach.js?v=10';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -555,6 +556,142 @@ export function runTests(log = console) {
     const eventsCopy = JSON.stringify(withLock);
     T.analyzeBrew(yuan, withLock);
     eq('pure: analyzeBrew does not mutate the recipe or the timeline', [JSON.stringify(yuan) === recipeCopy, JSON.stringify(withLock) === eventsCopy], [true, true]);
+  }
+
+  // ================= coach.js (scheduler) =================
+  {
+    const switchR = switchRig();
+    const v60R = v60Rig();
+    const recipeOf = (plan, extra = {}) => R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan, ...extra }));
+    const p = (id, atS, extra = {}) => ({ id, action: 'pour', atS, volumeMl: 50, valve: 'open', ...extra });
+    const fires = s => s.events.filter(e => e.kind === 'fire');
+    const cues = s => s.events.filter(e => e.kind === 'cue');
+    const buzzes = s => s.events.flatMap(e => (e.kind === 'cue' ? e.ticks.map(t => t.atS) : [e.atS])).sort((a, b) => a - b);
+
+    // ---- THE PLAN CHECK: actions 2 s apart produce no double-cue stutter ----
+    {
+      const s = C.schedule(recipeOf([p('a', 0), p('b', 2), p('c', 4)]), { rig: v60R, cueLeadS: 3 });
+      eq('stutter: one fire per step', fires(s).map(f => f.atS), [0, 2, 4]);
+      eq('stutter: at most one cue per step', cues(s).map(c => c.fireAtS), [0, 2, 4]);
+      eq('stutter: a cue never starts before the previous step fires', cues(s).map(c => c.atS), [-3, 0, 2]);
+      // Steps 2 and 3 show 2 → 1 on screen, but "2" lands on the previous fire, which already buzzed.
+      eq('stutter: buzz ticks are 3-2-1, then 1, then 1', cues(s).map(c => c.ticks.map(t => t.n)), [[3, 2, 1], [1], [1]]);
+      eq('stutter: the screen still counts 2 → 1 before steps 2 and 3', [C.stateAt(s, 0.5).countdown, C.stateAt(s, 1.5).countdown, C.stateAt(s, 2.5).countdown], [2, 1, 2]);
+      const b = buzzes(s);
+      eq('stutter: every buzz is at a distinct moment, ≥1 s apart', b.every((t, i) => i === 0 || t - b[i - 1] >= 1 - 1e-9), true);
+      eq('stutter: no two cue windows overlap', cues(s).every((c, i, all) => i === 0 || c.atS >= all[i - 1].fireAtS), true);
+      // Sample the countdown every 0.1 s: between two fires it never jumps back up.
+      let ok = true;
+      let prev = null;
+      for (let t = -3; t <= 4.001; t += 0.1) {
+        const st = C.stateAt(s, t);
+        if (st.last && prev && st.last.atS !== prev.lastAt) prev = null;   // a fire resets the countdown
+        if (st.countdown !== null && prev && prev.countdown !== null && st.countdown > prev.countdown) ok = false;
+        prev = { countdown: st.countdown, lastAt: st.last?.atS ?? null };
+      }
+      eq('stutter: sampled countdown never counts back up before its fire', ok, true);
+    }
+    {
+      const s = C.schedule(recipeOf([p('a', 0), p('b', 0.5)]), { rig: v60R });
+      eq('stutter: less than 1 s of warning → no countdown, just the fire', [cues(s).length, fires(s).length], [1, 2]);
+    }
+
+    // ---- Yuan ----
+    {
+      const s = C.schedule(yuanRecipe(), { rig: switchR });
+      eq('yuan: fires in order with the right words', fires(s).map(f => `${f.atS} ${f.label}`),
+        ['0 CLOSE VALVE + POUR', '40 OPEN VALVE', '45 POUR', '80 POUR', '110 SWIRL ×1', '150 LIFT DRIPPER']);
+      eq('yuan: countdown starts, lead 3 s', cues(s).map(c => c.atS), [-3, 37, 42, 77, 107, 147]);
+      eq('yuan: OPEN VALVE (0:40) then POUR (0:45): pour gets a full 3-2-1 from 0:42', cues(s)[2].ticks, [{ atS: 42, n: 3 }, { atS: 43, n: 2 }, { atS: 44, n: 1 }]);
+      eq('yuan: pre-roll starts 3 s before the first pour', [s.startS, s.endS], [-3, 150]);
+      const pours = fires(s).flatMap(f => f.actions).filter(a => a.type === 'pour');
+      eq('yuan: pour cues carry what the scale should read', pours.map(a => [a.volumeMl, a.cumulativeMl, a.tempC, a.valve]), [[50, 50, 92, 'closed'], [100, 150, 92, 'open'], [60, 210, 84, 'open']]);
+      eq('yuan: nothing skipped', s.skipped, []);
+    }
+
+    // ---- same second → one cue ----
+    {
+      const r = recipeOf([p('a', 0, { valve: 'closed', valveOpenAtS: 45 }), p('b', 45)]);
+      const s = C.schedule(r, { rig: switchR });
+      eq('same second: OPEN VALVE + POUR is one fire', fires(s).map(f => f.label), ['CLOSE VALVE + POUR', 'OPEN VALVE + POUR']);
+      eq('same second: and one cue', cues(s).length, 2);
+    }
+
+    // ---- rig capabilities ----
+    {
+      const yuanOnV60 = C.schedule(yuanRecipe(), { rig: v60R });
+      eq('rig: no valve → no CLOSE VALVE, no OPEN VALVE', fires(yuanOnV60).map(f => f.label), ['POUR', 'POUR', 'POUR', 'SWIRL ×1', 'LIFT DRIPPER']);
+      eq('rig: no valve → pours carry no valve state', fires(yuanOnV60).flatMap(f => f.actions).filter(a => a.type === 'pour').map(a => a.valve), [null, null, null]);
+      eq('rig: the ignored closure is reported', yuanOnV60.skipped, [{ seq: 1, reason: 'valve closure ignored: rig has no valve' }]);
+      const uncut = C.schedule(yuanRecipe(), { rig: model.createRig({ valveCapable: true, cuttable: false }) });
+      eq('rig: uncuttable → no LIFT DRIPPER', fires(uncut).some(f => f.label.includes('LIFT DRIPPER')), false);
+      eq('rig: uncuttable → the cut is reported skipped', uncut.skipped, [{ seq: 5, reason: "rig can't be cut" }]);
+      // Agreement with recipe.js: the coach never cues a step type the rig doesn't allow
+      for (const [name, rig] of [['V60', v60R], ['Switch', switchR], ['uncuttable', model.createRig({ cuttable: false })]]) {
+        const allowed = new Set([...R.allowedActions(rig), ...(rig.valveCapable ? ['open-valve'] : [])]);
+        eq(`rig: coach agrees with allowedActions (${name})`, C.plannedActions(yuanRecipe(), rig).actions.every(a => allowed.has(a.type)), true);
+      }
+    }
+
+    // ---- lead time ----
+    {
+      const r = recipeOf([p('a', 0), p('b', 30)], { cueLeadS: 5 });
+      eq('lead: recipe cue lead is used', [C.schedule(r, { rig: v60R }).cueLeadS, cues(C.schedule(r, { rig: v60R }))[1].atS], [5, 25]);
+      eq('lead: an explicit setting overrides the recipe', C.schedule(r, { rig: v60R, cueLeadS: 2 }).cueLeadS, 2);
+      eq('lead: 0 turns countdowns off', [cues(C.schedule(r, { rig: v60R, cueLeadS: 0 })).length, fires(C.schedule(r, { rig: v60R, cueLeadS: 0 })).length], [0, 2]);
+      eq('lead: invalid falls back to 3', C.schedule(recipeOf([p('a', 0)], { cueLeadS: -1 }), { rig: v60R, cueLeadS: 'x' }).cueLeadS, 3);
+    }
+
+    // ---- defensive ----
+    {
+      const s = C.schedule(recipeOf([p('a', 0), { id: 'c', action: 'cut', atS: 60 }, p('b', 90)]), { rig: v60R });
+      eq('defensive: nothing after the cut', [fires(s).map(f => f.label), s.skipped], [['POUR', 'LIFT DRIPPER'], [{ seq: 3, reason: 'after the cut' }]]);
+      const noTime = C.schedule(recipeOf([p('a', 0), p('b', null)]), { rig: v60R });
+      eq('defensive: a step with no time is skipped and reported', [fires(noTime).length, noTime.skipped], [1, [{ seq: 2, reason: 'no time' }]]);
+      const outOfOrder = C.schedule(recipeOf([p('a', 30), p('b', 0)]), { rig: v60R });
+      eq('defensive: steps out of order are cued in time order', fires(outOfOrder).map(f => f.atS), [0, 30]);
+      eq('defensive: empty or missing recipe → empty schedule', [C.schedule(null).events, C.schedule(recipeOf([])).events], [[], []]);
+    }
+
+    // ---- stateAt ----
+    {
+      const s = C.schedule(yuanRecipe(), { rig: switchR });
+      const at = t => { const st = C.stateAt(s, t); return [st.next?.label ?? null, st.countdown, st.last?.label ?? null, st.done]; };
+      eq('state: -3 s → counting 3 to CLOSE VALVE + POUR', at(-3), ['CLOSE VALVE + POUR', 3, null, false]);
+      eq('state: -0.4 s → 1', at(-0.4)[1], 1);
+      eq('state: at 0:00 the pour has fired, next is OPEN VALVE, no countdown yet', at(0), ['OPEN VALVE', null, 'CLOSE VALVE + POUR', false]);
+      eq('state: 0:38.5 → 2 to OPEN VALVE', at(38.5), ['OPEN VALVE', 2, 'CLOSE VALVE + POUR', false]);
+      eq('state: 0:20 → seconds to next', C.stateAt(s, 20).secondsToNext, 20);
+      eq('state: after the cut → done', at(151), [null, null, 'LIFT DRIPPER', true]);
+    }
+
+    // ---- buzzesBetween (what the adapter signals each frame) ----
+    {
+      const s = C.schedule(yuanRecipe(), { rig: switchR });
+      const all = C.buzzesBetween(s, -Infinity, Infinity);
+      eq('buzz: Yuan has 6 fires and 18 ticks', [all.filter(b => b.type === 'fire').length, all.filter(b => b.type === 'tick').length], [6, 18]);
+      // 60 fps frames with jitter: every buzz exactly once, in order
+      const got = [];
+      let t = -4;
+      let i = 0;
+      while (t < 152) {
+        const next = t + 0.016 + ((i++ * 7) % 5) * 0.003;
+        got.push(...C.buzzesBetween(s, t, next));
+        t = next;
+      }
+      eq('buzz: uneven 60 fps frames signal every moment exactly once', JSON.stringify(got), JSON.stringify(all));
+      eq('buzz: a frame boundary landing exactly on a buzz does not repeat it', [C.buzzesBetween(s, 39, 40).length, C.buzzesBetween(s, 40, 41).length], [1, 0]);
+      eq('buzz: a long gap (screen off 0:30→0:50) returns everything missed, in order',
+        C.buzzesBetween(s, 30, 50).map(b => `${b.atS}${b.type === 'tick' ? `:${b.n}` : '!'}`), ['37:3', '38:2', '39:1', '40!', '42:3', '43:2', '44:1', '45!']);
+    }
+
+    // ---- purity ----
+    {
+      const y = yuanRecipe();
+      const copy = JSON.stringify(y);
+      C.schedule(y, { rig: switchR });
+      eq('pure: schedule does not mutate the recipe', JSON.stringify(y), copy);
+    }
   }
 
   // ---- model ----
