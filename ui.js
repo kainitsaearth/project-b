@@ -1,7 +1,7 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=2';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=2';
+import * as model from './model.js?v=3';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=3';
 
 const LABELS = {
   beans: ['Beans', 'bean'],
