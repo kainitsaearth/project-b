@@ -1,8 +1,8 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=7';
-import * as recipeLib from './recipe.js?v=7';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=7';
+import * as model from './model.js?v=8';
+import * as recipeLib from './recipe.js?v=8';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=8';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -267,12 +267,18 @@ export function createUI(view, tabs, actions) {
       hint);
   }
 
-  // Time as seconds, m:ss or m.ss. Unreadable text is saved as "no time" and the
-  // input turns red, so a typo never looks the same as a deliberately empty field.
+  // Time typed as digits on the number pad (130 = 1:30), or m:ss. Shown as m:ss when you
+  // leave the box, and back as digits when you tap in, so no ':' key is ever needed.
+  // Unreadable text is saved as "no time" and the input turns red, so a typo never looks
+  // the same as a deliberately empty field.
   function clockInput(id, seconds, disabled, set) {
     return h('input', {
-      id, type: 'text', inputMode: 'decimal', placeholder: 'm:ss', class: 'clock', autocomplete: 'off',
+      id, type: 'text', inputMode: 'numeric', pattern: '[0-9]*', placeholder: 'mss', class: 'clock', autocomplete: 'off',
       value: recipeLib.formatClock(seconds), disabled,
+      onfocus: ev => {
+        const s = recipeLib.parseClock(ev.target.value);
+        if (s !== null) ev.target.value = recipeLib.clockDigits(s);
+      },
       oninput: ev => {
         const raw = ev.target.value;
         const s = recipeLib.parseClock(raw);

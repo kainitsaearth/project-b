@@ -1,9 +1,9 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=7';
-import * as model from './model.js?v=7';
-import * as R from './recipe.js?v=7';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=8';
+import * as model from './model.js?v=8';
+import * as R from './recipe.js?v=8';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -347,6 +347,15 @@ export function runTests(log = console) {
   eq('clock: m:ss', R.parseClock('1:05'), 65);
   eq('clock: m.ss (phone number pad)', R.parseClock('2.30'), 150);
   eq('clock: whitespace', R.parseClock(' 0:40 '), 40);
+  // Digits only (number pad, no ':' key): last two digits are seconds
+  eq('clock digits: 1–2 digits are seconds', [R.parseClock('5'), R.parseClock('45'), R.parseClock('90')], [5, 45, 90]);
+  eq('clock digits: 130 → 1:30', R.parseClock('130'), 90);
+  eq('clock digits: 300 → 3:00', R.parseClock('300'), 180);
+  eq('clock digits: 1000 → 10:00', R.parseClock('1000'), 600);
+  eq('clock digits: leading zeros ok (040, 0045)', [R.parseClock('040'), R.parseClock('0045')], [40, 45]);
+  eq('clock digits: 190 rejected (90 is not valid seconds)', R.parseClock('190'), null);
+  eq('clock digits: back to digits for editing', [R.clockDigits(0), R.clockDigits(40), R.clockDigits(90), R.clockDigits(600), R.clockDigits(null)], ['0', '40', '130', '1000', '']);
+  eq('clock digits: round-trip 0..1200 s', Array.from({ length: 1201 }, (_, s) => s).every(s => R.parseClock(R.clockDigits(s)) === s), true);
   for (const bad of ['', '1:5', '1:75', 'abc', '-5', '1:30:00', null, 1.5]) {
     eq(`clock: rejects ${JSON.stringify(bad)}`, R.parseClock(bad), null);
   }

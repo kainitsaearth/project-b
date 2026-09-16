@@ -15,14 +15,21 @@ const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
 // ---------- time ----------
 
-// '45' → 45 · '1:05' → 65 · '1.05' → 65 (phone number pads have '.', not ':').
-// Seconds after the separator must be two digits and < 60. Anything else → null.
+// Digits only, for phone number pads with no ':' key:
+//   1–2 digits = seconds        '45' → 0:45 · '90' → 1:30
+//   3+ digits  = minutes + ss   '130' → 1:30 · '300' → 3:00 · '1000' → 10:00 · '190' → null (90 s isn't valid)
+// Also accepted: '1:05' and '1.05'. Seconds after a separator must be two digits and < 60.
 export function parseClock(value) {
   if (isNum(value)) return Number.isInteger(value) && value >= 0 ? value : null;
   if (typeof value !== 'string') return null;
   const t = value.trim();
   let m = /^(\d+)$/.exec(t);
-  if (m) return Number(m[1]);
+  if (m) {
+    const d = m[1];
+    if (d.length <= 2) return Number(d);
+    const secs = Number(d.slice(-2));
+    return secs < 60 ? Number(d.slice(0, -2)) * 60 + secs : null;
+  }
   m = /^(\d+)[:.](\d{2})$/.exec(t);
   if (m && Number(m[2]) < 60) return Number(m[1]) * 60 + Number(m[2]);
   return null;
@@ -32,6 +39,14 @@ export function formatClock(seconds) {
   if (!isNum(seconds) || seconds < 0) return '';
   const s = Math.round(seconds);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// The digits-only form of a time, for editing on a number pad: 90 → '130', 40 → '40', 0 → '0'.
+// Round-trips: parseClock(clockDigits(s)) === s.
+export function clockDigits(seconds) {
+  if (!isNum(seconds) || seconds < 0) return '';
+  const s = Math.round(seconds);
+  return s < 60 ? String(s) : `${Math.floor(s / 60)}${String(s % 60).padStart(2, '0')}`;
 }
 
 // ---------- capabilities ----------

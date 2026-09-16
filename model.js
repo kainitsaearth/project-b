@@ -1,7 +1,7 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-import { allowedActions, ALL_ACTIONS } from './recipe.js?v=7';
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=8';
 
 // Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
 export { allowedActions, ALL_ACTIONS };
@@ -126,7 +126,7 @@ export const FIELDS = {
     { key: 'cueLeadS', label: 'Cue lead (s)', type: 'number', hint: 'Warning before each step in the pour coach.' },
     // Rendered in the Plan section after the last step, where drawdown happens.
     { key: 'targetDrawdownEndS', label: 'Target drawdown end', type: 'clock', section: 'plan',
-      hint: "When you expect the bed to finish draining. You can't control it exactly. "
+      hint: "Type digits: 300 = 3:00. When you expect the bed to finish draining. You can't control it exactly. "
         + "Set it from past brews of this bean. Optional: without it, drawdown drift isn't judged." },
   ],
   waters: [
