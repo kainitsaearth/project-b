@@ -1,7 +1,7 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-import { allowedActions, ALL_ACTIONS } from './recipe.js?v=6';
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=7';
 
 // Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
 export { allowedActions, ALL_ACTIONS };
@@ -31,9 +31,10 @@ const BEAN_DEFAULTS = {
 const RIG_DEFAULTS = {
   name: '', grinder: '', grinderNotes: '',
   dripper: '', filter: '', filterBatch: '', kettle: '', scale: '',
-  valveCapable: false,      // closed valve possible — Hario Switch, Clever
-  immersionCapable: false,  // planned steep possible
+  valveCapable: false,      // Hario Switch, Clever — a pour can close the valve, which is the steep
   cuttable: true,           // almost any dripper can be lifted off the server
+  // `immersionCapable` was removed 2026-09-16: on a valve rig, closing the valve IS the steep.
+  // Older saved rigs may still carry it; nothing reads it.
 };
 
 const WATER_DEFAULTS = { name: '', type: 'other', ppm: null, notes: '' };
@@ -64,7 +65,9 @@ export function createAction(action, plan = []) {
   const lastPour = [...plan].reverse().find(a => a.action === 'pour');
   let atS = 0;
   if (last) {
-    const end = last.action === 'steep' && Number.isFinite(last.durationS) ? last.atS + last.durationS : last.atS;
+    // After a steep, start from when the valve opens rather than when it closed.
+    const opensAt = last.action === 'pour' && last.valve === 'closed' && Number.isFinite(last.valveOpenAtS) ? last.valveOpenAtS : null;
+    const end = Math.max(Number.isFinite(last.atS) ? last.atS : -Infinity, opensAt ?? -Infinity);
     atS = Number.isFinite(end) ? end + 30 : null;
   }
   const base = { id: uid('step'), action, atS };
@@ -73,10 +76,10 @@ export function createAction(action, plan = []) {
       return { ...base, volumeMl: null, cumulativeMl: null,
         tempC: lastPour?.tempC ?? 93, style: lastPour?.style ?? '',
         flowRate: lastPour?.flowRate ?? null,  // flow rate: 1 = low … 10 = high; optional
-        valve: 'open' };
-    case 'steep': return { ...base, durationS: 30 };
+        valve: 'open',
+        valveOpenAtS: null };                  // set when valve is 'closed' — ends the steep
     case 'swirl': return { ...base, count: 1 };
-    default: return base; // release, cut
+    default: return base; // cut
   }
 }
 
@@ -108,8 +111,8 @@ export const FIELDS = {
     { key: 'filterBatch', label: 'Filter batch' },
     { key: 'kettle', label: 'Kettle' },
     { key: 'scale', label: 'Scale' },
-    { key: 'valveCapable', label: 'Has a valve', type: 'bool', hint: 'Hario Switch, Clever. Enables release.' },
-    { key: 'immersionCapable', label: 'Can steep', type: 'bool', hint: 'Planned immersion. Enables steep.' },
+    { key: 'valveCapable', label: 'Has a valve', type: 'bool',
+      hint: 'Hario Switch, Clever. Lets a pour close the valve, which is a steep, then open it at a set time.' },
     { key: 'cuttable', label: 'Can be cut', type: 'bool', hint: 'Dripper can be lifted to end extraction early.' },
   ],
   recipes: [

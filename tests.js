@@ -1,24 +1,33 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=6';
-import * as model from './model.js?v=6';
-import * as R from './recipe.js?v=6';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=7';
+import * as model from './model.js?v=7';
+import * as R from './recipe.js?v=7';
 
-// Plan Step 4's test recipe: 50 g closed → release → 100 g → 60 g @ 84 °C → swirl ×1 → cut.
+// Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
+// Steep model: the valve closes ON pour 1 and its open time lives there, no separate release step.
 const yuanRecipe = () => R.normalizeRecipe(model.createRecipe({
   id: 'recipe-yuan', name: 'Yuan valve-lock', rigId: 'rig-switch', doseG: 17,
   plan: [
-    { id: 's1', action: 'pour', atS: 0, volumeMl: 50, tempC: 92, style: 'center', valve: 'closed' },
-    { id: 's2', action: 'release', atS: 40 },
-    { id: 's3', action: 'pour', atS: 45, volumeMl: 100, tempC: 92, style: 'spiral', valve: 'open' },
-    { id: 's4', action: 'pour', atS: 80, volumeMl: 60, tempC: 84, style: 'center', valve: 'open' },
-    { id: 's5', action: 'swirl', atS: 110, count: 1 },
-    { id: 's6', action: 'cut', atS: 150 },
+    { id: 's1', action: 'pour', atS: 0, volumeMl: 50, tempC: 92, style: 'center', valve: 'closed', valveOpenAtS: 40 },
+    { id: 's2', action: 'pour', atS: 45, volumeMl: 100, tempC: 92, style: 'spiral', valve: 'open' },
+    { id: 's3', action: 'pour', atS: 80, volumeMl: 60, tempC: 84, style: 'center', valve: 'open' },
+    { id: 's4', action: 'swirl', atS: 110, count: 1 },
+    { id: 's5', action: 'cut', atS: 150 },
   ],
 }));
-const switchRig = () => model.createRig({ id: 'rig-switch', name: 'C40 + Hario Switch', valveCapable: true, immersionCapable: true });
+// The same recipe as saved before the steep model: a separate `release` step.
+const legacyYuanPlan = () => [
+  { id: 's1', action: 'pour', atS: 0, volumeMl: 50, tempC: 92, style: 'center', valve: 'closed' },
+  { id: 'sR', action: 'release', atS: 40 },
+  { id: 's2', action: 'pour', atS: 45, volumeMl: 100, tempC: 92, style: 'spiral', valve: 'open' },
+  { id: 's3', action: 'pour', atS: 80, volumeMl: 60, tempC: 84, style: 'center', valve: 'open' },
+  { id: 's4', action: 'swirl', atS: 110, count: 1 },
+  { id: 's5', action: 'cut', atS: 150 },
+];
+const switchRig = () => model.createRig({ id: 'rig-switch', name: 'C40 + Hario Switch', valveCapable: true });
 const v60Rig = () => model.seedPresets().rigs.find(r => r.id === 'rig-seed-c40-v60');
 
 // A brew shaped like spec §5, as Step 8's clone-last will produce it.
@@ -139,19 +148,13 @@ export function runTests(log = console) {
   // ---- recipe: derived fields ----
   {
     const y = yuanRecipe();
-    eq('recipe: seq numbered 1..6', y.plan.map(a => a.seq), [1, 2, 3, 4, 5, 6]);
+    eq('recipe: seq numbered 1..5', y.plan.map(a => a.seq), [1, 2, 3, 4, 5]);
     eq('recipe: cumulative ml is what the scale reads', y.plan.filter(a => a.action === 'pour').map(a => a.cumulativeMl), [50, 150, 210]);
-    eq('recipe: non-pours carry no cumulative', 'cumulativeMl' in y.plan[1], false);
+    eq('recipe: non-pours carry no cumulative', 'cumulativeMl' in y.plan[3], false);
     eq('recipe: total water 210', y.totalWaterMl, 210);
     near('recipe: ratio 210 / 17', y.targetRatio, 210 / 17);
-    eq('recipe: total time from last action (cut @ 2:30)', y.targetTotalTimeS, 150);
-
-    const steep = R.normalizeRecipe({ plan: [
-      { id: 'a', action: 'pour', atS: 0, volumeMl: 200 },
-      { id: 'b', action: 'steep', atS: 30, durationS: 90 },
-    ] });
-    eq('recipe: steep end counts toward total time', steep.targetTotalTimeS, 120);
-    eq('recipe: no dose → ratio null, not NaN', steep.targetRatio, null);
+    eq('recipe: total time from the planned cut (2:30)', y.targetTotalTimeS, 150);
+    eq('recipe: no dose → ratio null, not NaN', R.normalizeRecipe({ plan: [{ id: 'a', action: 'pour', atS: 0, volumeMl: 200 }] }).targetRatio, null);
 
     const broken = R.normalizeRecipe({ plan: [
       { id: 'a', action: 'pour', atS: 0, volumeMl: 50 },
@@ -163,6 +166,90 @@ export function runTests(log = console) {
     eq('recipe: a missing time → total time null', R.normalizeRecipe({ plan: [{ id: 'a', action: 'pour', atS: null, volumeMl: 5 }] }).targetTotalTimeS, null);
     eq('recipe: empty plan → nulls', [R.normalizeRecipe({ plan: [] }).totalWaterMl, R.normalizeRecipe({ plan: [] }).targetTotalTimeS], [null, null]);
     eq('recipe: normalize does not mutate input', (() => { const raw = { plan: [{ id: 'a', action: 'pour', atS: 0, volumeMl: 5 }] }; R.normalizeRecipe(raw); return 'seq' in raw.plan[0]; })(), false);
+    eq('recipe: normalize is idempotent', JSON.stringify(R.normalizeRecipe(y)), JSON.stringify(y));
+  }
+
+  // ---- recipe: steep = closed-valve pour + open time ----
+  {
+    const y = yuanRecipe();
+    const at = (plan, i) => [plan[i].valveState, plan[i].valveClosedByStep, plan[i].valveClosedUntilS];
+    eq('steep: Yuan pour 1 closes the valve until 0:40', at(y.plan, 0), ['closed', 1, 40]);
+    eq('steep: closed for 0:40, stored on the pour that closes it', y.plan[0].closedForS, 40);
+    eq('steep: pour 2 at 0:45 is after the valve opens', at(y.plan, 1), ['open', null, null]);
+    eq('steep: only the closing pour carries closedForS', y.plan.filter(a => 'closedForS' in a).map(a => a.seq), [1]);
+    eq('steep: total steep 0:40', y.totalSteepS, 40);
+
+    const multi = R.normalizeRecipe({ plan: [
+      { id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 90 },
+      { id: 'p2', action: 'pour', atS: 30, volumeMl: 50, valve: 'open' },
+      { id: 'w', action: 'swirl', atS: 60, count: 1 },
+      { id: 'p3', action: 'pour', atS: 90, volumeMl: 50, valve: 'open' },
+    ] });
+    eq('steep: a pour before the open time is inside the steep', at(multi.plan, 1), ['closed', 1, 90]);
+    eq('steep: a swirl inside the steep is valve-closed', at(multi.plan, 2), ['closed', 1, 90]);
+    eq('steep: a pour exactly at the open time is outside', at(multi.plan, 3), ['open', null, null]);
+    eq('steep: spanning 2 pours, closed for 1:30', [multi.plan[0].closedForS, multi.totalSteepS], [90, 90]);
+    eq('steep: swirl inside a steep is valid', R.validateRecipe({ ...multi, rigId: 'r' }, switchRig()), []);
+
+    const insideClosed = R.normalizeRecipe({ plan: [
+      { id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 90 },
+      { id: 'p2', action: 'pour', atS: 30, volumeMl: 50, valve: 'closed', valveOpenAtS: 60 },
+    ] });
+    eq('steep: "closed" on a pour already inside a steep does not start another',
+      [at(insideClosed.plan, 1), 'closedForS' in insideClosed.plan[1], insideClosed.totalSteepS], [['closed', 1, 90], false, 90]);
+
+    const two = R.normalizeRecipe({ plan: [
+      { id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 30 },
+      { id: 'p2', action: 'pour', atS: 45, volumeMl: 50, valve: 'closed', valveOpenAtS: 75 },
+    ] });
+    eq('steep: two separate steeps add up', [two.plan[1].valveClosedByStep, two.totalSteepS], [2, 60]);
+
+    const noCutLongSteep = R.normalizeRecipe({ plan: [
+      { id: 'p1', action: 'pour', atS: 0, volumeMl: 200, valve: 'closed', valveOpenAtS: 120 },
+      { id: 'w', action: 'swirl', atS: 60, count: 1 },
+    ] });
+    eq('steep: with no cut, total time runs to when the valve opens', noCutLongSteep.targetTotalTimeS, 120);
+
+    const msgs = plan => R.validateRecipe({ rigId: 'r', plan }, switchRig()).map(x => x.message);
+    const unopened = [
+      { id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed' },
+      { id: 'p2', action: 'pour', atS: 30, volumeMl: 50, valve: 'open' },
+    ];
+    eq('steep: closed with no open time is flagged', msgs(unopened), ['Step 1 (pour): valve closed — set when to open it']);
+    eq('steep: …and covers only its own pour', at(R.normalizeRecipe({ plan: unopened }).plan, 1), ['open', null, null]);
+    eq('steep: …and total steep is unknown, not 0', R.normalizeRecipe({ plan: unopened }).totalSteepS, null);
+    eq('steep: open time before the pour is flagged',
+      msgs([{ id: 'p1', action: 'pour', atS: 40, volumeMl: 50, valve: 'closed', valveOpenAtS: 30 }]),
+      ['Step 1 (pour): open time (0:30) must be after the pour starts (0:40)']);
+    eq('steep: cutting while the valve is closed is flagged',
+      msgs([{ id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 200 }, { id: 'c', action: 'cut', atS: 150 }]),
+      ['Step 2 (cut): the valve is still closed until 3:20 — nothing is draining yet']);
+    eq('steep: drawdown cannot end before the valve opens',
+      R.validateRecipe({ rigId: 'r', targetDrawdownEndS: 90, plan: [
+        { id: 'p1', action: 'pour', atS: 0, volumeMl: 50, valve: 'closed', valveOpenAtS: 100 },
+        { id: 'p2', action: 'pour', atS: 30, volumeMl: 50, valve: 'open' },
+      ] }, switchRig()).map(x => x.message),
+      ['Target drawdown end (1:30) must be after the valve opens (1:40).']);
+  }
+
+  // ---- recipe: migrating plans saved with release / steep steps ----
+  {
+    const y = yuanRecipe();
+    const legacy = R.normalizeRecipe({ ...y, plan: legacyYuanPlan() });
+    eq('migrate: old release step becomes pour 1 open time, identical to the new Yuan', JSON.stringify(legacy.plan), JSON.stringify(y.plan));
+    eq('migrate: no release/steep steps survive', legacy.plan.some(a => a.action === 'release' || a.action === 'steep'), false);
+    eq('migrate: old steep closes the pour before it, open at the steep end',
+      R.migratePlan([{ id: 'a', action: 'pour', atS: 0, volumeMl: 200, valve: 'open' }, { id: 'b', action: 'steep', atS: 30, durationS: 90 }]),
+      [{ id: 'a', action: 'pour', atS: 0, volumeMl: 200, valve: 'closed', valveOpenAtS: 120 }]);
+    eq('migrate: a release with no closed pour is dropped',
+      R.migratePlan([{ id: 'a', action: 'pour', atS: 0, volumeMl: 200, valve: 'open' }, { id: 'r', action: 'release', atS: 30 }]),
+      [{ id: 'a', action: 'pour', atS: 0, volumeMl: 200, valve: 'open' }]);
+    eq('migrate: an existing open time is not overwritten',
+      R.migratePlan([{ id: 'a', action: 'pour', atS: 0, valve: 'closed', valveOpenAtS: 20 }, { id: 'r', action: 'release', atS: 30 }])[0].valveOpenAtS, 20);
+    const raw = legacyYuanPlan();
+    R.migratePlan(raw);
+    eq('migrate: does not mutate the saved plan', [raw.length, 'valveOpenAtS' in raw[0]], [6, false]);
+    eq('migrate: idempotent', JSON.stringify(R.migratePlan(R.migratePlan(legacyYuanPlan()))), JSON.stringify(R.migratePlan(legacyYuanPlan())));
   }
 
   // ---- recipe: rig capabilities (THE Step 4 check, logic half) ----
@@ -172,24 +259,25 @@ export function runTests(log = console) {
     eq('rig: Yuan on a Switch → no conflicts', R.rigConflicts(y.plan, switchRig()), []);
 
     const conflicts = R.rigConflicts(y.plan, v60Rig());
-    eq('rig: Yuan → V60 refused on exactly steps 1 and 2', conflicts.map(c => [c.step, c.action, c.fix]),
-      [[1, 'pour', 'open-valve'], [2, 'release', 'remove']]);
-    eq('rig: conflict messages say why', conflicts.map(c => c.message), [
-      'Step 1 (pour): closed valve, but this rig has no valve',
-      'Step 2 (release): this rig has no valve to release',
-    ]);
-    eq('rig: V60 validation surfaces the same 2 problems', R.validateRecipe({ ...y, rigId: 'rig-seed-c40-v60' }, v60Rig()).length, 2);
+    eq('rig: Yuan → V60 refused on exactly the closed pour', conflicts.map(c => [c.step, c.action, c.fix]), [[1, 'pour', 'open-valve']]);
+    eq('rig: conflict message says why', conflicts.map(c => c.message), ['Step 1 (pour): closed valve, but this rig has no valve']);
+    eq('rig: fix text warns the steep is dropped', conflicts[0].fixText, 'pour step 1 with the valve open (its steep is dropped)');
+    eq('rig: V60 validation surfaces the same problem', R.validateRecipe({ ...y, rigId: 'rig-seed-c40-v60' }, v60Rig()).length, 1);
 
     const adapted = R.adaptPlanToRig(y.plan, v60Rig());
-    eq('rig: adapt removes release only', adapted.map(a => a.id), ['s1', 's3', 's4', 's5', 's6']);
-    eq('rig: adapt opens the closed pour', adapted[0].valve, 'open');
-    eq('rig: adapted plan has no conflicts', R.rigConflicts(adapted, v60Rig()), []);
-    eq('rig: adapt does not mutate the original', [y.plan.length, y.plan[0].valve], [6, 'closed']);
+    eq('rig: adapt keeps every step', adapted.map(a => a.id), ['s1', 's2', 's3', 's4', 's5']);
+    eq('rig: adapt opens the valve and clears its open time', [adapted[0].valve, adapted[0].valveOpenAtS], ['open', null]);
+    eq('rig: adapted plan has no conflicts and no steep',
+      [R.rigConflicts(adapted, v60Rig()), R.normalizeRecipe({ plan: adapted }).totalSteepS], [[], 0]);
+    eq('rig: adapt does not mutate the original', [y.plan[0].valve, y.plan[0].valveOpenAtS], ['closed', 40]);
 
-    const noCut = model.createRig({ cuttable: false });
-    eq('rig: cut refused on uncuttable rig', R.rigConflicts(y.plan, noCut).map(c => c.action), ['pour', 'release', 'cut']);
-    eq('rig: steep refused without immersion', R.rigConflicts([{ id: 'x', action: 'steep', atS: 0, durationS: 30 }], v60Rig()).map(c => c.action), ['steep']);
+    eq('rig: cut refused on an uncuttable, valve-less rig', R.rigConflicts(y.plan, model.createRig({ cuttable: false })).map(c => c.action), ['pour', 'cut']);
     eq('rig: open-valve pour is fine on a V60', R.rigConflicts([{ id: 'x', action: 'pour', valve: 'open' }], v60Rig()), []);
+    eq('caps: step types are pour, swirl, cut', R.ALL_ACTIONS, ['pour', 'swirl', 'cut']);
+    eq('caps: V60 and Switch offer the same step types',
+      [model.allowedActions(v60Rig()), model.allowedActions(switchRig())], [['pour', 'swirl', 'cut'], ['pour', 'swirl', 'cut']]);
+    eq('caps: uncuttable rig has no cut', model.allowedActions(model.createRig({ cuttable: false })), ['pour', 'swirl']);
+    eq('caps: new rigs no longer carry "Can steep"', 'immersionCapable' in model.createRig(), false);
   }
 
   // ---- recipe: validation ----
@@ -199,17 +287,17 @@ export function runTests(log = console) {
     eq('validate: no rig', R.validateRecipe({ ...y, rigId: null }, undefined).map(x => x.message), ['Pick a rig.']);
     eq('validate: rig deleted', R.validateRecipe(y, undefined)[0].message, "This recipe's rig no longer exists. Pick another.");
     eq('validate: no pours', msgs({ ...y, plan: [{ id: 'x', action: 'swirl', atS: 0, count: 1 }] }), ['Add at least one pour.']);
-    const outOfOrder = structuredClone(y); outOfOrder.plan[3].atS = 30;
-    eq('validate: step earlier than the one above', msgs(outOfOrder), ['Step 4 (pour): starts before the step above it']);
+    const outOfOrder = structuredClone(y); outOfOrder.plan[2].atS = 30;
+    eq('validate: step earlier than the one above', msgs(outOfOrder), ['Step 3 (pour): starts before the step above it']);
     const bad = structuredClone(y);
-    bad.plan[0].volumeMl = 0; bad.plan[2].tempC = 150; bad.plan[4].count = 1.5; bad.plan[5].atS = null;
+    bad.plan[0].volumeMl = 0; bad.plan[1].tempC = 150; bad.plan[3].count = 1.5; bad.plan[4].atS = null;
     eq('validate: volume, temp, swirl count, time', msgs(bad), [
       'Step 1 (pour): volume missing',
-      'Step 3 (pour): temperature must be 1–100 °C',
-      'Step 5 (swirl): swirl count must be a whole number, 1 or more',
-      'Step 6 (cut): time missing (seconds, or m:ss)',
+      'Step 2 (pour): temperature must be 1–100 °C',
+      'Step 4 (swirl): swirl count must be a whole number, 1 or more',
+      'Step 5 (cut): time missing (seconds, or m:ss)',
     ]);
-    eq('validate: equal times are allowed', msgs({ ...y, plan: y.plan.map(a => (a.id === 's3' ? { ...a, atS: 40 } : a)) }), []);
+    eq('validate: equal times are allowed', msgs({ ...y, plan: y.plan.map(a => (a.id === 's2' ? { ...a, atS: 40 } : a)) }), []);
   }
 
   // ---- recipe: target drawdown end ----
@@ -234,24 +322,24 @@ export function runTests(log = console) {
     eq('drawdown: survives a fork', R.forkRecipe({ ...y, targetDrawdownEndS: 180 }, 'f', []).targetDrawdownEndS, 180);
 
     const afterCut = structuredClone(y);
-    afterCut.plan.push({ id: 's7', action: 'pour', atS: 160, volumeMl: 20, valve: 'open' });
-    eq('cut: a step after the cut is flagged', msgs(afterCut), ['Step 7 (pour): comes after the cut — the dripper is already off']);
+    afterCut.plan.push({ id: 's6', action: 'pour', atS: 160, volumeMl: 20, valve: 'open' });
+    eq('cut: a step after the cut is flagged', msgs(afterCut), ['Step 6 (pour): comes after the cut — the dripper is already off']);
   }
 
   // ---- recipe: pour flow rate 1–10 ----
   {
     const y = yuanRecipe();
-    const withFlow = flowRate => ({ ...y, plan: y.plan.map(a => (a.id === 's3' ? { ...a, flowRate } : a)) });
+    const withFlow = flowRate => ({ ...y, plan: y.plan.map(a => (a.id === 's2' ? { ...a, flowRate } : a)) });
     const msgs = recipe => R.validateRecipe(recipe, switchRig()).map(x => x.message);
     eq('flow rate: optional — unset is fine', msgs(withFlow(null)), []);
     eq('flow rate: 1 and 10 are valid', [msgs(withFlow(1)), msgs(withFlow(10))], [[], []]);
     for (const bad of [0, 11, 5.5, -1]) {
-      eq(`flow rate: ${bad} rejected`, msgs(withFlow(bad)), ['Step 3 (pour): flow rate must be a whole number 1–10']);
+      eq(`flow rate: ${bad} rejected`, msgs(withFlow(bad)), ['Step 2 (pour): flow rate must be a whole number 1–10']);
     }
     eq('flow rate: first pour starts unset', model.createAction('pour').flowRate, null);
     eq('flow rate: next pour inherits it', model.createAction('pour', [{ action: 'pour', atS: 0, flowRate: 7 }]).flowRate, 7);
     eq('flow rate: only pours carry it', 'flowRate' in model.createAction('swirl'), false);
-    eq('flow rate: survives adapting to a V60', R.adaptPlanToRig(withFlow(4).plan, v60Rig()).find(a => a.id === 's3').flowRate, 4);
+    eq('flow rate: survives adapting to a V60', R.adaptPlanToRig(withFlow(4).plan, v60Rig()).find(a => a.id === 's2').flowRate, 4);
   }
 
   // ---- recipe: clock ----
@@ -276,7 +364,8 @@ export function runTests(log = console) {
 
     const v2 = R.forkRecipe(y, 'recipe-yuan-2', [y]);
     eq('version: fork is v2 of the same family', [v2.version, v2.familyId, v2.forkedFrom, v2.id], [2, 'recipe-yuan', 'recipe-yuan', 'recipe-yuan-2']);
-    eq('version: fork keeps the plan', v2.plan.map(a => a.cumulativeMl ?? null), y.plan.map(a => a.cumulativeMl ?? null));
+    eq('version: fork keeps the plan, steep included',
+      [v2.plan.map(a => a.cumulativeMl ?? null), v2.plan[0].valveOpenAtS], [y.plan.map(a => a.cumulativeMl ?? null), 40]);
     v2.plan[0].volumeMl = 999;
     eq('version: editing the fork leaves the original untouched', y.plan[0].volumeMl, 50);
     const v3 = R.forkRecipe(y, 'recipe-yuan-3', [y, v2]);
@@ -288,12 +377,12 @@ export function runTests(log = console) {
     const r = model.createRecipe();
     eq('model: new recipe is v1, own family', [r.version, r.familyId === r.id, r.cueLeadS, r.plan], [1, true, 3, []]);
     const plan = [model.createAction('pour')];
-    eq('model: first step at 0:00', plan[0].atS, 0);
+    eq('model: first step at 0:00, valve open, no open time', [plan[0].atS, plan[0].valve, plan[0].valveOpenAtS], [0, 'open', null]);
     plan[0].tempC = 88; plan[0].style = 'spiral';
     const next = model.createAction('pour', plan);
     eq('model: next pour inherits temp + style, +30 s', [next.atS, next.tempC, next.style, next.valve], [30, 88, 'spiral', 'open']);
-    const afterSteep = model.createAction('release', [{ action: 'steep', atS: 30, durationS: 60 }]);
-    eq('model: step after a steep starts after it ends', afterSteep.atS, 120);
+    eq('model: step after a steep starts from its open time',
+      model.createAction('pour', [{ action: 'pour', atS: 0, valve: 'closed', valveOpenAtS: 40 }]).atS, 70);
     eq('model: step ids unique', model.createAction('cut').id !== model.createAction('cut').id, true);
   }
 
@@ -304,16 +393,7 @@ export function runTests(log = console) {
   const ids = [...rigs, ...waters].map(e => e.id);
   eq('seed: ids unique', new Set(ids).size, ids.length);
   eq('seed: ids stable across calls', model.seedPresets().rigs.map(r => r.id), rigs.map(r => r.id));
-
-  const v60 = rigs.find(r => r.id === 'rig-seed-c40-v60');
-  const v60Actions = model.allowedActions(v60);
-  eq('caps: V60 cannot steep', v60Actions.includes('steep'), false);
-  eq('caps: V60 cannot release', v60Actions.includes('release'), false);
-  eq('caps: V60 can cut', v60Actions.includes('cut'), true);
-  eq('caps: Switch-like rig gets steep + release',
-    model.allowedActions(model.createRig({ valveCapable: true, immersionCapable: true })),
-    ['pour', 'swirl', 'steep', 'release', 'cut']);
-  eq('caps: uncuttable rig has no cut', model.allowedActions(model.createRig({ cuttable: false })).includes('cut'), false);
+  eq('seed: no seeded rig has a valve', rigs.some(r => r.valveCapable), false);
 
   eq('factory: unique ids', model.createBean().id !== model.createBean().id, true);
   eq('factory: overrides kept', model.createWater({ ppm: 75 }).ppm, 75);

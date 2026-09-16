@@ -220,7 +220,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 }
 
 .step.has-issues { border-left-color: var(--danger); }
-.step[data-action="steep"], .step[data-action="release"] { border-left-style: double; }
+.steep-block {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.steep-title { font-weight: 700; font-size: .875rem; color: var(--accent); }
+.steep-info { font-weight: 600; font-size: .875rem; font-variant-numeric: tabular-nums; }
+.valve-inside {
+  margin: 0; padding: 6px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--accent); font-size: .875rem; font-weight: 600;
+}
 
 .step-head { display: flex; align-items: center; gap: 10px; }
 .step-num {

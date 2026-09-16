@@ -3,10 +3,10 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=6';
-import * as model from './model.js?v=6';
-import * as recipeLib from './recipe.js?v=6';
-import { createUI } from './ui.js?v=6';
+import * as store from './store.js?v=7';
+import * as model from './model.js?v=7';
+import * as recipeLib from './recipe.js?v=7';
+import { createUI } from './ui.js?v=7';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -112,6 +112,21 @@ async function load() {
     }
   }
   saved = snap;
+
+  // Re-derive recipes saved by older versions (e.g. separate release/steep steps before
+  // the steep model). The snapshot still holds the old JSON, so save() writes the change.
+  let migrated = 0;
+  for (const recipe of Object.values(state.recipes)) {
+    const next = recipeLib.normalizeRecipe(recipe);
+    if (JSON.stringify(next) !== JSON.stringify(recipe)) {
+      state.recipes[recipe.id] = next;
+      migrated += 1;
+    }
+  }
+  if (migrated) {
+    console.info(`[recipe] migrated ${migrated} recipe(s) to the current plan format`);
+    scheduleSave();
+  }
 }
 
 // First run only. The flag lives in meta, so deleting a seeded rig keeps it deleted.
@@ -252,7 +267,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=6').then(m => m.runTests());
+    import('./tests.js?v=7').then(m => m.runTests());
   }
 }
 

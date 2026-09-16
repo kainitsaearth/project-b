@@ -1,8 +1,8 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=6';
-import * as recipeLib from './recipe.js?v=6';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=6';
+import * as model from './model.js?v=7';
+import * as recipeLib from './recipe.js?v=7';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=7';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -12,7 +12,7 @@ const LABELS = {
 };
 
 const ACTION_TITLES = {
-  pour: 'Pour', swirl: 'Swirl', steep: 'Steep', release: 'Release valve', cut: 'Cut — lift dripper',
+  pour: 'Pour', swirl: 'Swirl', cut: 'Cut — lift dripper',
 };
 
 // Tiny element builder. User text always goes in as text nodes, never as HTML.
@@ -163,7 +163,9 @@ export function createUI(view, tabs, actions) {
     ];
     if (kind === 'rigs') return [
       line([e.grinder, e.dripper, e.filter]),
-      h('span', { class: 'badges' }, model.allowedActions(e).map(a => h('span', { class: 'badge' }, a))),
+      h('span', { class: 'badges' },
+        model.allowedActions(e).map(a => h('span', { class: 'badge' }, a)),
+        e.valveCapable ? h('span', { class: 'badge' }, 'valve · steep') : null),
     ];
     return line([e.type, e.ppm != null ? `${e.ppm} ppm` : null]);
   }
@@ -211,6 +213,7 @@ export function createUI(view, tabs, actions) {
       const blocked = model.ALL_ACTIONS.filter(a => !allowed.includes(a));
       return [
         row('Recipe actions', allowed.join(' · ')),
+        row('Valve', e.valveCapable ? 'close on any pour → steep' : 'none'),
         blocked.length ? row('Not possible', blocked.join(' · ')) : null,
       ].filter(Boolean);
     }
@@ -293,7 +296,10 @@ export function createUI(view, tabs, actions) {
     return JSON.stringify([
       r.rigId, recipeLib.allowedActions(rig), Boolean(rig?.valveCapable),
       actions.recipeUsage(r.id) > 0,
-      (r.plan ?? []).map(a => a.id),
+      // The valve picker's value decides whether a steep block exists. Which later pours
+      // fall inside a steep is NOT here: it changes while typing an open time, and is
+      // handled by show/hide in the refresher so the keyboard stays up.
+      (r.plan ?? []).map(a => (a.action === 'pour' ? `${a.id}:${a.valve ?? 'open'}` : a.id)),
       rigPrompt?.recipeId === r.id ? rigPrompt.rigId : null,
     ]);
   }
@@ -387,6 +393,9 @@ export function createUI(view, tabs, actions) {
     return [
       row('Total water', r.totalWaterMl != null ? `${fmt(r.totalWaterMl)} ml` : '—'),
       row('Brew ratio', r.targetRatio != null ? `1:${r.targetRatio.toFixed(1)}` : '—'),
+      r.plan.some(a => a.closedForS !== undefined)
+        ? row('Steep (valve closed)', r.totalSteepS != null ? recipeLib.formatClock(r.totalSteepS) : '—')
+        : null,
       row('Drawdown end', r.targetDrawdownEndS != null ? recipeLib.formatClock(r.targetDrawdownEndS) : 'not set'),
       row('Total time', r.targetTotalTimeS != null ? recipeLib.formatClock(r.targetTotalTimeS) : '—'),
       issues.length
@@ -427,15 +436,30 @@ export function createUI(view, tabs, actions) {
             const label = v === recipeLib.FLOW_RATE_MIN ? `${v} low` : v === recipeLib.FLOW_RATE_MAX ? `${v} high` : String(v);
             return h('option', { value: String(v), selected: a.flowRate === v }, label);
           }))),
-        rig?.valveCapable || a.valve === 'closed'
-          ? labeled('Valve', h('select', { id: inputId('valve'), disabled: frozen, onchange: ev => set('valve', ev.target.value) },
-              ['open', 'closed'].map(v => h('option', { value: v, selected: (a.valve ?? 'open') === v }, v))))
-          : null,
       ];
-    } else if (a.action === 'steep') {
-      body = [num('durationS', 'Steep (s)')];
     } else if (a.action === 'swirl') {
       body = [num('count', 'Swirls')];
+    }
+
+    // ---- valve & steep ----
+    // Built once per structure; the refresher only shows/hides (see recipeStructure).
+    const showValve = Boolean(rig?.valveCapable) || (a.action === 'pour' && a.valve === 'closed');
+    let valvePicker = null;
+    let steepBlock = null;
+    let steepInfo = null;
+    const insideNote = h('p', { class: 'valve-inside', hidden: true });
+    if (a.action === 'pour' && showValve) {
+      valvePicker = labeled('Valve', h('select', { id: inputId('valve'), disabled: frozen, onchange: ev => set('valve', ev.target.value) },
+        ['open', 'closed'].map(v => h('option', { value: v, selected: (a.valve ?? 'open') === v }, v))));
+      body.push(valvePicker);
+      if (a.valve === 'closed') {
+        steepInfo = h('output', { class: 'steep-info' });
+        steepBlock = h('div', { class: 'steep-block', id: `steep-${a.id}` },
+          h('span', { class: 'steep-title' }, 'Steep — valve closed'),
+          h('div', { class: 'step-body' },
+            labeled('Open valve at', clockInput(inputId('valveOpenAtS'), a.valveOpenAtS, frozen, s => set('valveOpenAtS', s)))),
+          steepInfo);
+      }
     }
 
     const cumulative = h('output', { class: 'step-cumulative' });
@@ -451,6 +475,8 @@ export function createUI(view, tabs, actions) {
           iconBtn('✕', `Remove step ${i + 1}`, false, () => actions.removeStep(recipe.id, a.id)))),
       h('div', { class: 'step-body' }, clock, body),
       a.action === 'pour' ? cumulative : null,
+      steepBlock,
+      insideNote,
       issuesEl);
 
     refreshers.push(r => {
@@ -458,6 +484,22 @@ export function createUI(view, tabs, actions) {
       if (!s) return;
       if (s.action === 'pour') {
         cumulative.textContent = s.cumulativeMl != null ? `→ ${fmt(s.cumulativeMl)} ml on the scale` : '→ ? ml on the scale';
+      }
+
+      // Inside someone else's steep: no own valve choice, just say so.
+      const inside = s.valveClosedByStep != null && s.valveClosedByStep !== s.seq;
+      insideNote.hidden = !inside;
+      if (inside) {
+        insideNote.textContent = `Valve still closed from step ${s.valveClosedByStep}`
+          + (s.valveClosedUntilS != null ? ` — opens ${recipeLib.formatClock(s.valveClosedUntilS)}` : '');
+      }
+      if (valvePicker) valvePicker.hidden = inside;
+      if (steepBlock) steepBlock.hidden = inside;
+      if (steepInfo && !inside) {
+        const within = r.plan.filter(x => x.action === 'pour' && x.valveClosedByStep === s.seq && x.seq !== s.seq).map(x => x.seq);
+        steepInfo.textContent = s.closedForS != null
+          ? `Closed for ${recipeLib.formatClock(s.closedForS)}` + (within.length ? ` · includes pour ${within.join(', ')}` : '')
+          : 'Set when to open the valve';
       }
       const own = recipeLib.validateRecipe(r, state.rigs[r.rigId]).filter(x => x.stepId === a.id);
       issuesEl.replaceChildren(...own.map(x => h('li', {}, x.message.replace(/^Step \d+ \([a-z]+\): /, ''))));
