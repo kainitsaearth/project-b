@@ -1,9 +1,10 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=8';
-import * as model from './model.js?v=8';
-import * as R from './recipe.js?v=8';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=9';
+import * as model from './model.js?v=9';
+import * as R from './recipe.js?v=9';
+import * as T from './timeline.js?v=9';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -393,6 +394,167 @@ export function runTests(log = console) {
     eq('model: step after a steep starts from its open time',
       model.createAction('pour', [{ action: 'pour', atS: 0, valve: 'closed', valveOpenAtS: 40 }]).atS, 70);
     eq('model: step ids unique', model.createAction('cut').id !== model.createAction('cut').id, true);
+  }
+
+  // ================= timeline.js =================
+  {
+    const pour = (atS, extra = {}) => ({ type: 'pour', atS, volumeMl: 50, valve: 'open', ...extra });
+    const valve = (atS, state) => ({ type: 'valve', atS, state, trigger: 'test' });
+    const end = (type, atS) => ({ type, atS });
+    const v60Events = last => [pour(0), pour(45, { volumeMl: 100 }), pour(80, { volumeMl: 60 }), ...(last ? [last] : [])];
+    const v60Plan = (extra = {}) => R.normalizeRecipe(model.createRecipe({
+      id: 'recipe-v60', rigId: 'rig-seed-c40-v60', doseG: 15, targetDrawdownEndS: 180,
+      plan: [
+        { id: 'a', action: 'pour', atS: 0, volumeMl: 50, valve: 'open' },
+        { id: 'b', action: 'pour', atS: 45, volumeMl: 100, valve: 'open' },
+        { id: 'c', action: 'pour', atS: 80, volumeMl: 60, valve: 'open' },
+      ],
+      ...extra,
+    }));
+    const sumPhases = seg => Object.values(seg.phases).reduce((t, v) => t + v, 0);
+    const flags = drift => Object.fromEntries(Object.entries(drift.phases).map(([k, v]) => [k, v.flag]));
+
+    // ---- THE FIVE PLAN CHECKS ----
+
+    // 1. V60 (no valve events) → exactly bloom, percolation, drawdown. No steep key, not even null.
+    const t1 = T.segmentTimeline(v60Events(end('drawdown-complete', 180)));
+    eq('timeline #1: V60 → exactly bloom, percolation, drawdown', Object.keys(t1.phases), ['bloom', 'percolation', 'drawdown']);
+    eq('timeline #1: no steep key, not even null', ['steep' in t1.phases, 'lock' in t1.phases], [false, false]);
+    eq('timeline #1: bloom 0:45 · percolation 0:35 · drawdown 1:40', [t1.phases.bloom, t1.phases.percolation, t1.phases.drawdown], [45, 35, 100]);
+
+    // 2. Two separate steeps → durations sum
+    const t2Events = [pour(0, { valve: 'closed' }), valve(30, 'open'), pour(45, { valve: 'closed' }), valve(75, 'open'), pour(90), end('drawdown-complete', 150)];
+    const t2 = T.segmentTimeline(t2Events, [{ closeAtS: 0 }, { closeAtS: 45 }]);
+    eq('timeline #2: two steeps (0:30 + 0:30) sum to 1:00', t2.phases.steep, 60);
+    eq('timeline #2: both closures are steeps', t2.closures.map(c => [c.kind, c.durationS]), [['steep', 30], ['steep', 30]]);
+    eq('timeline #2: open gaps are bloom / percolation / drawdown', [t2.phases.bloom, t2.phases.percolation, t2.phases.drawdown], [15, 15, 60]);
+
+    // 3. Same raw events: planned closure → steep, unplanned → lock
+    const t3Events = [pour(0), pour(30), pour(60), valve(70, 'closed'), { type: 'swirl', atS: 72, count: 1 }, valve(80, 'open'), end('drawdown-complete', 150)];
+    const t3Copy = JSON.stringify(t3Events);
+    const t3Planned = T.segmentTimeline(t3Events, [{ closeAtS: 68 }]);
+    const t3Live = T.segmentTimeline(t3Events, []);
+    eq('timeline #3: planned closure → steep', [t3Planned.phases.steep, 'lock' in t3Planned.phases], [10, false]);
+    eq('timeline #3: same events, unplanned → lock', [t3Live.phases.lock, 'steep' in t3Live.phases], [10, false]);
+    eq('timeline #3: the raw events were not changed', JSON.stringify(t3Events), t3Copy);
+
+    // 4 & 5. Same numbers, different meaning: drawdown planned to 3:00, brew ends at 2:30
+    const plan45 = v60Plan();
+    const t4 = T.analyzeBrew(plan45, v60Events(end('cut', 150)));
+    const t5 = T.analyzeBrew(plan45, v60Events(end('drawdown-complete', 150)));
+    eq('timeline #4/#5: both drawdowns are 1:10 against a planned 1:40', [t4.phases.drawdown, t5.phases.drawdown, t4.plannedPhases.drawdown], [70, 70, 100]);
+    eq('timeline #4: cut at 2:30 → endedBy cut', t4.endedBy, 'cut');
+    eq('timeline #4: cut → NO drawdown drift flag', [t4.drift.phases.drawdown.flag, t4.drift.phases.drawdown.exempt, t4.drift.phases.drawdown.deltaS], [null, 'cut', -30]);
+    eq('timeline #4: cut → no short/long flag anywhere', Object.values(t4.drift.phases).concat(t4.drift.total).some(d => d.flag === 'short' || d.flag === 'long'), false);
+    eq('timeline #5: natural finish at 2:30 → endedBy drawdown', t5.endedBy, 'drawdown');
+    eq('timeline #5: → drawdown SHORT by 0:30', [t5.drift.phases.drawdown.flag, t5.drift.phases.drawdown.deltaS], ['short', -30]);
+    eq('timeline #5: → total short too', t5.drift.total.flag, 'short');
+
+    // ---- the plan as a timeline ----
+    const yuan = yuanRecipe();
+    const yuanPlan = T.planToTimeline(yuan);
+    eq('plan→timeline: Yuan events', yuanPlan.events.map(e => `${e.type}${e.valve === 'closed' ? '(closed)' : ''}@${e.atS}`),
+      ['pour(closed)@0', 'valve@40', 'pour@45', 'pour@80', 'swirl@110', 'cut@150']);
+    eq('plan→timeline: Yuan has one planned closure 0:00–0:40', yuanPlan.closures, [{ closeAtS: 0, openAtS: 40 }]);
+    const yuanPlanned = T.segmentTimeline(yuanPlan.events, yuanPlan.closures);
+    eq('plan→timeline: Yuan planned phases', yuanPlanned.phases, { bloom: 5, percolation: 35, steep: 40, drawdown: 70 });
+    eq('plan→timeline: Yuan segments in order',
+      yuanPlanned.segments.map(s => `${s.phase} ${s.startS}-${s.endS}`), ['steep 0-40', 'bloom 40-45', 'percolation 45-80', 'drawdown 80-150']);
+    eq('plan→timeline: no drawdown target and no cut → planned drawdown unknown',
+      T.segmentTimeline(T.planToTimeline(v60Plan({ targetDrawdownEndS: null })).events).phases.drawdown, null);
+
+    // ---- a realistic Yuan brew ----
+    const yuanActual = [pour(0, { valve: 'closed' }), valve(43, 'open'), pour(47), pour(83), { type: 'swirl', atS: 112, count: 1 }, end('cut', 152)];
+    const ya = T.analyzeBrew(yuan, yuanActual);
+    eq('yuan brew: phases', ya.phases, { bloom: 4, percolation: 36, steep: 43, drawdown: 69 });
+    eq('yuan brew: a few seconds off everywhere → all on', flags(ya.drift), { bloom: 'on', percolation: 'on', steep: 'on', drawdown: 'on' });
+    eq('yuan brew: total 2:32 vs 2:30 → on', [ya.drift.total.deltaS, ya.drift.total.flag], [2, 'on']);
+
+    const withLock = [...yuanActual.slice(0, 4), valve(100, 'closed'), valve(108, 'open'), ...yuanActual.slice(4)];
+    const yl = T.analyzeBrew(yuan, withLock);
+    eq('live lock: a mid-drawdown closure is a lock, the planned one still a steep', yl.closures.map(c => c.kind), ['steep', 'lock']);
+    eq('live lock: 0:08 lock carved out of drawdown', [yl.phases.lock, yl.phases.drawdown], [8, 61]);
+    eq('live lock: never judged as drift', [yl.drift.phases.lock.flag, yl.drift.phases.lock.exempt, yl.drift.phases.lock.actualS], [null, 'live', 8]);
+
+    // ---- steep matching ----
+    const closeAt = x => T.segmentTimeline([pour(0), pour(30), valve(x, 'closed'), valve(x + 10, 'open'), pour(90), end('drawdown-complete', 150)], [{ closeAtS: 0 }]).closures[0].kind;
+    eq('match: closure 0:12 after a planned one → steep', closeAt(12), 'steep');
+    eq('match: closure 0:15 after → steep (window edge)', closeAt(15), 'steep');
+    eq('match: closure 0:20 after → lock', closeAt(20), 'lock');
+    eq('match: one planned closure claims only one actual closure',
+      T.segmentTimeline([pour(0, { valve: 'closed' }), valve(5, 'open'), valve(8, 'closed'), valve(12, 'open'), pour(30), end('drawdown-complete', 90)], [{ closeAtS: 0 }]).closures.map(c => c.kind),
+      ['steep', 'lock']);
+    eq('match: no recipe → every closure is a lock', T.analyzeBrew(null, t2Events).closures.map(c => c.kind), ['lock', 'lock']);
+
+    // ---- valve edge cases ----
+    const neverOpened = T.segmentTimeline([pour(0, { valve: 'closed' }), pour(30), end('cut', 100)], [{ closeAtS: 0 }]);
+    eq('valve: closed and never reopened → steep until the cut', [neverOpened.phases, neverOpened.closures[0].durationS], [{ steep: 100 }, 100]);
+    const immersion = T.segmentTimeline([pour(0, { valve: 'closed', volumeMl: 200 }), valve(120, 'open'), end('drawdown-complete', 180)], [{ closeAtS: 0 }]);
+    eq('valve: single-pour immersion → steep 2:00, drawdown 1:00, no bloom', immersion.phases, { steep: 120, drawdown: 60 });
+    const preClosed = T.segmentTimeline([valve(-5, 'closed'), pour(0, { valve: 'closed' }), valve(30, 'open'), pour(45), end('drawdown-complete', 120)], [{ closeAtS: 0 }]);
+    eq('valve: closed before the first pour → steep counted from the pour', preClosed.phases, { bloom: 15, steep: 30, drawdown: 75 });
+    // Pour 2 lands inside the steep, so there is no open-valve time before pour 2 → no bloom.
+    eq('valve: an "open" pour inside a steep does not open the valve',
+      T.segmentTimeline([pour(0, { valve: 'closed' }), pour(20, { valve: 'open' }), valve(60, 'open'), pour(70), end('drawdown-complete', 130)], [{ closeAtS: 0 }]).phases,
+      { percolation: 10, steep: 60, drawdown: 60 });
+
+    // ---- ends ----
+    const both = (a, b) => T.segmentTimeline([...v60Events(), a, b]);
+    eq('end: drawdown-complete before cut → ended by drawdown', [both(end('drawdown-complete', 140), end('cut', 150)).endedBy, both(end('drawdown-complete', 140), end('cut', 150)).totalS], ['drawdown', 140]);
+    eq('end: cut before drawdown-complete → ended by cut', [both(end('cut', 130), end('drawdown-complete', 140)).endedBy, both(end('cut', 130), end('drawdown-complete', 140)).totalS], ['cut', 130]);
+    const running = T.segmentTimeline(v60Events());
+    eq('end: no end yet → incomplete, drawdown still running (null)', [running.complete, running.endedBy, running.totalS, running.phases], [false, null, null, { bloom: 45, percolation: 35, drawdown: null }]);
+    eq('end: running brew → drawdown not judged', (() => { const d = T.analyzeBrew(plan45, v60Events()).drift; return [d.phases.drawdown.flag, d.phases.bloom.flag, d.total.flag]; })(), [null, 'on', null]);
+    const afterEnd = T.segmentTimeline([...v60Events(end('drawdown-complete', 180)), pour(200)]);
+    eq('end: taps after the end are ignored', [afterEnd.phases, afterEnd.ignoredAfterEnd], [t1.phases, 1]);
+
+    // ---- pour counts ----
+    eq('pours: one pour → drawdown only', T.segmentTimeline([pour(0), end('drawdown-complete', 60)]).phases, { drawdown: 60 });
+    eq('pours: two pours → bloom + drawdown', T.segmentTimeline([pour(0), pour(30), end('drawdown-complete', 100)]).phases, { bloom: 30, drawdown: 70 });
+    const noPours = T.segmentTimeline([end('cut', 10)]);
+    eq('pours: none → no phases, incomplete', [noPours.phases, noPours.complete, noPours.totalS], [{}, false, null]);
+
+    // ---- robustness ----
+    const shuffled = [end('drawdown-complete', 180), pour(80, { volumeMl: 60 }), pour(0), null, { type: 'pour', atS: 'x' }, pour(45, { volumeMl: 100 })];
+    const sh = T.segmentTimeline(shuffled);
+    eq('robust: taps in any order give the same phases', sh.phases, t1.phases);
+    eq('robust: unreadable taps are counted, not used', sh.ignored, 2);
+    eq('robust: not a timeline → empty', T.segmentTimeline(undefined).phases, {});
+
+    // ---- phases always add up to the total ----
+    for (const [name, seg] of [['V60', t1], ['two steeps', t2], ['lock', t3Live], ['Yuan plan', yuanPlanned], ['Yuan with lock', T.segmentTimeline(withLock, yuanPlan.closures)], ['pre-closed', preClosed]]) {
+      eq(`invariant: ${name} phases sum to total`, sumPhases(seg), seg.totalS);
+    }
+
+    // ---- drift rules ----
+    const P = { phases: { bloom: 45, drawdown: 100 }, totalS: 145 };
+    const A = (bloom, drawdown, extra = {}) => ({ phases: { bloom, drawdown }, totalS: bloom + drawdown, endedBy: 'drawdown', ...extra });
+    eq('drift: bloom +5 is on, drawdown +10 is on (tolerance edges)', flags(T.phaseDrift(P, A(50, 110))), { bloom: 'on', drawdown: 'on' });
+    eq('drift: bloom +6 is long, drawdown −11 is short', flags(T.phaseDrift(P, A(51, 89))), { bloom: 'long', drawdown: 'short' });
+    eq('drift: total +15 is long', T.phaseDrift(P, A(50, 110)).total.flag, 'long');
+    eq('drift: custom tolerance', flags(T.phaseDrift(P, A(51, 89), { phaseS: 10, drawdownS: 15 })), { bloom: 'on', drawdown: 'on' });
+    eq('drift: a cut exempts SHORT drawdown only — LONG is still flagged', [
+      T.phaseDrift(P, A(45, 80, { endedBy: 'cut' })).phases.drawdown.flag,
+      T.phaseDrift(P, A(45, 130, { endedBy: 'cut' })).phases.drawdown.flag,
+    ], [null, 'long']);
+    eq('drift: phase only in the actual counts as planned 0', T.phaseDrift(P, { phases: { bloom: 45, percolation: 20, drawdown: 100 }, totalS: 165, endedBy: 'drawdown' }).phases.percolation,
+      { planS: 0, actualS: 20, deltaS: 20, flag: 'long', exempt: null });
+    eq('drift: phase only in the plan counts as actual 0', T.phaseDrift({ phases: { bloom: 45, steep: 30, drawdown: 100 }, totalS: 175 }, A(45, 100)).phases.steep.flag, 'short');
+    eq('drift: no plan → nothing judged', Object.values(T.phaseDrift(null, A(45, 100)).phases).every(d => d.flag === null), true);
+    eq('drift: plan without a drawdown target → drawdown and total not judged', (() => {
+      const d = T.analyzeBrew(v60Plan({ targetDrawdownEndS: null }), v60Events(end('drawdown-complete', 180))).drift;
+      return [d.phases.drawdown.flag, d.phases.drawdown.planS, d.total.flag, d.phases.bloom.flag];
+    })(), [null, null, null, 'on']);
+    eq('drift: planned cut 2:30, natural finish at 2:10 → short (not exempt: no cut happened)',
+      T.analyzeBrew(v60Plan({ plan: [...v60Plan().plan, { id: 'x', action: 'cut', atS: 150 }] }), v60Events(end('drawdown-complete', 130))).drift.phases.drawdown.flag, 'short');
+    eq('drift: finish at 3:20 against 3:00 → long', T.analyzeBrew(plan45, v60Events(end('drawdown-complete', 200))).drift.phases.drawdown.flag, 'long');
+    eq('drift: DEFAULT_TOLERANCE is ±5 / ±10 / ±10 and frozen', [T.DEFAULT_TOLERANCE, Object.isFrozen(T.DEFAULT_TOLERANCE)], [{ phaseS: 5, drawdownS: 10, totalS: 10 }, true]);
+
+    // ---- purity ----
+    const recipeCopy = JSON.stringify(yuan);
+    const eventsCopy = JSON.stringify(withLock);
+    T.analyzeBrew(yuan, withLock);
+    eq('pure: analyzeBrew does not mutate the recipe or the timeline', [JSON.stringify(yuan) === recipeCopy, JSON.stringify(withLock) === eventsCopy], [true, true]);
   }
 
   // ---- model ----
