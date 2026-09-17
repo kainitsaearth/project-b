@@ -49,7 +49,9 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 
-.topbar h1 { margin: 0; font-size: 1.125rem; }
+.topbar h1 { margin: 0; font-size: 1.125rem; line-height: 1.2; }
+.brand { display: flex; flex-direction: column; }
+.app-version { font-size: .6875rem; color: var(--muted); opacity: .7; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 
 main { padding: 16px; }
 

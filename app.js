@@ -3,15 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=20';
-import * as model from './model.js?v=20';
-import * as recipeLib from './recipe.js?v=20';
-import * as coachLib from './coach.js?v=20';
-import * as timelineLib from './timeline.js?v=20';
-import * as brewLib from './brew.js?v=20';
-import * as assessLib from './assessment.js?v=20';
-import { daysOffRoast } from './compute.js?v=20';
-import { createUI } from './ui.js?v=20';
+import * as store from './store.js?v=21';
+import * as model from './model.js?v=21';
+import * as recipeLib from './recipe.js?v=21';
+import * as coachLib from './coach.js?v=21';
+import * as timelineLib from './timeline.js?v=21';
+import * as brewLib from './brew.js?v=21';
+import * as assessLib from './assessment.js?v=21';
+import { daysOffRoast } from './compute.js?v=21';
+import { createUI } from './ui.js?v=21';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -472,7 +472,12 @@ function finishBrew() {
 
 // ---------- boot ----------
 
+// The version this build was loaded as: the ?v= on this module's own URL (bumped on every deploy).
+const APP_VERSION = new URL(import.meta.url).searchParams.get('v');
+
 async function boot() {
+  const versionEl = document.getElementById('app-version');
+  if (versionEl) versionEl.textContent = APP_VERSION ? `v${APP_VERSION}` : '';
   ui = createUI(document.getElementById('view'), document.getElementById('tabs'), actions);
 
   addEventListener('hashchange', render);
@@ -499,7 +504,7 @@ async function boot() {
   }
 
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=20').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
+    import('./tests.js?v=21').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
   }
 }
 

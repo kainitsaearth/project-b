@@ -8,11 +8,14 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=20">
+  <link rel="stylesheet" href="styles.css?v=21">
 </head>
 <body>
   <header class="topbar">
-    <h1>Project B</h1>
+    <div class="brand">
+      <h1>Project B</h1>
+      <span id="app-version" class="app-version"></span>
+    </div>
     <span id="not-saving" class="chip chip-danger" role="alert" hidden>NOT SAVING</span>
   </header>
 
@@ -20,6 +23,6 @@
 
   <nav id="tabs" class="tabs" aria-label="Sections"></nav>
 
-  <script type="module" src="app.js?v=20"></script>
+  <script type="module" src="app.js?v=21"></script>
 </body>
 </html>

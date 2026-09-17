@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=20';
-import * as model from './model.js?v=20';
-import * as recipeLib from './recipe.js?v=20';
-import * as C from './coach.js?v=20';
+import { h } from './dom.js?v=21';
+import * as model from './model.js?v=21';
+import * as recipeLib from './recipe.js?v=21';
+import * as C from './coach.js?v=21';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {

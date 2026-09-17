@@ -1,14 +1,14 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=20';
-import * as model from './model.js?v=20';
-import * as R from './recipe.js?v=20';
-import * as T from './timeline.js?v=20';
-import * as C from './coach.js?v=20';
-import * as Bw from './brew.js?v=20';
-import * as As from './assessment.js?v=20';
-import * as Xp from './exportData.js?v=20';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=21';
+import * as model from './model.js?v=21';
+import * as R from './recipe.js?v=21';
+import * as T from './timeline.js?v=21';
+import * as C from './coach.js?v=21';
+import * as Bw from './brew.js?v=21';
+import * as As from './assessment.js?v=21';
+import * as Xp from './exportData.js?v=21';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
