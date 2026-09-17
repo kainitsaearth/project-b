@@ -1,8 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" fill="#1b1a18"/>
-  <!-- dripper cone -->
-  <path d="M146 170 H366 L292 300 H220 Z" fill="#d08a52"/>
-  <rect x="126" y="150" width="260" height="26" rx="13" fill="#d08a52"/>
-  <!-- drop -->
-  <path d="M256 322 C256 322 222 364 222 386 A34 34 0 0 0 290 386 C290 364 256 322 256 322 Z" fill="#f6f4f0"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><rect width="512" height="512" fill="#1b1a18"/><g fill="#6b4a30" stroke="#1b1a18" stroke-width="12" stroke-linejoin="round" paint-order="stroke"><path d="M174.0 272.0 H338.0 L277.3 380.2 H234.7 Z"/><rect x="164.2" y="263.8" width="183.7" height="16.4" rx="8.2"/></g><g fill="#a06a40" stroke="#1b1a18" stroke-width="12" stroke-linejoin="round" paint-order="stroke"><path d="M174.0 206.0 H338.0 L277.3 314.2 H234.7 Z"/><rect x="164.2" y="197.8" width="183.7" height="16.4" rx="8.2"/></g><g fill="#d08a52" stroke="#1b1a18" stroke-width="12" stroke-linejoin="round" paint-order="stroke"><path d="M174.0 140.0 H338.0 L277.3 248.2 H234.7 Z"/><rect x="164.2" y="131.8" width="183.7" height="16.4" rx="8.2"/></g><path stroke="#1b1a18" stroke-width="12" stroke-linejoin="round" paint-order="stroke" fill="#f6f4f0" d="M256.0 260.2 C256.0 260.2 234.0 287.5 234.0 302.0 A22.0 22.0 0 0 0 278.0 302.0 C278.0 287.5 256.0 260.2 256.0 260.2 Z"/></svg>
