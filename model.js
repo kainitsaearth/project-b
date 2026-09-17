@@ -1,7 +1,7 @@
 // model.js — factories, ids, field schemas, capability flags, seed presets.
 // No DOM, no storage.
 
-import { allowedActions, ALL_ACTIONS } from './recipe.js?v=13';
+import { allowedActions, ALL_ACTIONS } from './recipe.js?v=15';
 
 // Capability logic lives in pure recipe.js; re-exported so existing callers don't move.
 export { allowedActions, ALL_ACTIONS };
@@ -77,6 +77,7 @@ export function createAction(action, plan = []) {
         tempC: lastPour?.tempC ?? 93, style: lastPour?.style ?? '',
         flowRate: lastPour?.flowRate ?? null,  // flow rate: 1 = low … 10 = high; optional
         dripAssist: false,                     // poured through a drip assist (Melodrip etc.); never inherited
+        tareBefore: false,                     // tare the scale before this pour: its scale target restarts at 0
         valve: 'open',
         valveOpenAtS: null };                  // set when valve is 'closed' — ends the steep
     case 'swirl': return { ...base, count: 1 };

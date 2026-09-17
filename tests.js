@@ -1,11 +1,11 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=13';
-import * as model from './model.js?v=13';
-import * as R from './recipe.js?v=13';
-import * as T from './timeline.js?v=13';
-import * as C from './coach.js?v=13';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=15';
+import * as model from './model.js?v=15';
+import * as R from './recipe.js?v=15';
+import * as T from './timeline.js?v=15';
+import * as C from './coach.js?v=15';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -857,6 +857,46 @@ export function runTests(log = console) {
     eq('drip assist: stamped on the tapped pour', dt.filter(e => e.type === 'pour').map(e => e.dripAssist), [false, true]);
     eq('drip assist: does not block the plan', R.validateRecipe(da, v60Rig()).length, 0);
     eq('drip assist: survives adapting the plan to another rig', R.adaptPlanToRig(da.plan, v60Rig())[1].dripAssist, true);
+  }
+
+  // ================= prep reminders: drip assist on/off, tare (recipe.js + coach.js) =================
+  {
+    const plan = [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 60, valve: 'open' },
+      { id: 'b', action: 'pour', atS: 45, volumeMl: 90, valve: 'open', dripAssist: true, tareBefore: true },
+      { id: 'c', action: 'pour', atS: 90, volumeMl: 50, valve: 'open', dripAssist: true },
+      { id: 'd', action: 'pour', atS: 120, volumeMl: 50, valve: 'open', tareBefore: true },
+      { id: 'e', action: 'pour', atS: 125, volumeMl: 50, valve: 'open', tareBefore: true },
+    ];
+    const r = R.normalizeRecipe(model.createRecipe({ rigId: 'r', doseG: 15, plan }));
+    eq('tare: scale targets restart at 0 after a tare', r.plan.map(a => a.scaleMl), [60, 90, 140, 50, 50]);
+    eq('tare: total water still counts every pour', [r.plan.map(a => a.cumulativeMl), r.totalWaterMl], [[60, 150, 200, 250, 300], 300]);
+    eq('prep: put on, then tare · nothing between two drip assist pours · remove, then tare',
+      r.plan.map(a => a.prep), [[], ['PUT ON DRIP ASSIST', 'TARE SCALE'], [], ['REMOVE DRIP ASSIST', 'TARE SCALE'], ['TARE SCALE']]);
+    eq('tare: new pours default off', model.createAction('pour').tareBefore, false);
+    eq('tare: an unreadable volume blanks the scale target until the next tare',
+      R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [{ id: 'x', action: 'pour', atS: 0, volumeMl: null }, { id: 'y', action: 'pour', atS: 30, volumeMl: 40 }, { id: 'z', action: 'pour', atS: 60, volumeMl: 40, tareBefore: true }] })).plan.map(a => a.scaleMl),
+      [null, null, 40]);
+
+    const s = C.schedule(r, { rig: v60Rig() });
+    const preps = s.events.filter(e => e.kind === 'prep');
+    eq('reminder: 10 s before the pour, buzzing on its own', preps.slice(0, 2).map(p => [p.atS, p.fireAtS, p.buzz, p.label]),
+      [[35, 45, true, 'PUT ON DRIP ASSIST · TARE SCALE'], [110, 120, true, 'REMOVE DRIP ASSIST · TARE SCALE']]);
+    eq('reminder: 5 s after the previous pour it squeezes in 1 s after that pour, 1 s before the countdown', [preps[2].buzz, preps[2].atS, preps[2].fireAtS], [true, 121, 125]);
+    const tight = C.schedule(R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 50 }, { id: 'b', action: 'pour', atS: 2, volumeMl: 50, tareBefore: true }] })), { rig: v60Rig() });
+    const tp = tight.events.find(e => e.kind === 'prep');
+    eq('reminder: pours 2 s apart → no room to buzz, shown from the previous pour', [tp.buzz, tp.atS, C.buzzesBetween(tight, -20, 5).filter(b => b.type === 'prep').length], [false, 0, 0]);
+    eq('reminder: buzzes in order, a prep never lands on a tick or a fire',
+      C.buzzesBetween(s, 30, 46).map(b => `${b.type}@${b.atS}`), ['prep@35', 'tick@42', 'tick@43', 'tick@44', 'fire@45']);
+    eq('reminder: the screen shows it from the reminder until the pour', [34, 35, 44.9, 45].map(t => C.stateAt(s, t).prep?.label ?? null),
+      [null, 'PUT ON DRIP ASSIST · TARE SCALE', 'PUT ON DRIP ASSIST · TARE SCALE', null]);
+    eq('reminder: never buzzes before the previous step has fired', preps.every(p => !p.buzz || p.atS > 0), true);
+    const first = C.schedule(R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [{ id: 'a', action: 'pour', atS: 0, volumeMl: 50, tareBefore: true }] })), { rig: v60Rig() });
+    eq('reminder: on the first pour it moves the pre-roll to −10 s', [first.startS, first.events[0].kind, first.events[0].buzz], [-10, 'prep', true]);
+    eq('reminder: the cue carries the scale reading and the tare', C.plannedActions(r, v60Rig()).actions.map(a => [a.scaleMl, a.tareBefore]),
+      [[60, false], [90, true], [140, false], [50, true], [50, true]]);
+    eq('reminder: none without drip assist or tare (Yuan unchanged)', C.schedule(yuanRecipe(), { rig: switchRig() }).events.some(e => e.kind === 'prep'), false);
   }
 
   // ---- model ----

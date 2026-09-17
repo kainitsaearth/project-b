@@ -14,6 +14,8 @@
 
 export const DEFAULT_CUE_LEAD_S = 3;
 export const MIN_CUE_S = 1;
+// A prep reminder (put on / remove drip assist, tare) comes this long before the pour.
+export const PREP_LEAD_S = 10;
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const EPS = 1e-9;
@@ -43,6 +45,8 @@ export function plannedActions(recipe, rig) {
         volumeMl: a.volumeMl ?? null, cumulativeMl: a.cumulativeMl ?? null,
         tempC: a.tempC ?? null, style: a.style || null, flowRate: a.flowRate ?? null,
         dripAssist: Boolean(a.dripAssist),
+        scaleMl: a.scaleMl ?? a.cumulativeMl ?? null, tareBefore: Boolean(a.tareBefore),
+        prep: Array.isArray(a.prep) ? a.prep : [],
         valve: valve ? (closes || a.valveState === 'closed' ? 'closed' : 'open') : null,
         closesValve: closes,
       });
@@ -98,6 +102,18 @@ export function schedule(recipe, { rig = null, cueLeadS } = {}) {
     const label = g.actions.map(a => a.label).join(' + ');
     const cueAtS = Math.max(g.atS - lead, prevFireS);
     const windowS = g.atS - cueAtS;
+
+    // Prep reminder: PREP_LEAD_S before the pour, but never before the previous step has fired.
+    // No room for its own buzz before the countdown → it is shown on screen, not buzzed.
+    const items = [...new Set(g.actions.flatMap(a => a.prep ?? []))];
+    if (items.length) {
+      const wanted = g.atS - PREP_LEAD_S;
+      const earliest = Number.isFinite(prevFireS) ? prevFireS + MIN_CUE_S : -Infinity;
+      const at = Math.min(Math.max(wanted, earliest), cueAtS);
+      const buzz = at <= cueAtS - MIN_CUE_S + EPS && at > prevFireS + EPS;
+      events.push({ kind: 'prep', atS: buzz ? at : Math.max(cueAtS, prevFireS), fireAtS: g.atS, items,
+        label: items.join(' · '), buzz, shortened: at > wanted + EPS });
+    }
     if (lead > 0 && windowS >= MIN_CUE_S - EPS) {
       // One tick per whole second before the fire. A tick landing exactly on the previous
       // fire is dropped: that moment already buzzed.
@@ -114,7 +130,7 @@ export function schedule(recipe, { rig = null, cueLeadS } = {}) {
 
   return {
     cueLeadS: lead,
-    startS: events.length ? Math.min(0, events[0].atS) : 0,   // negative = pre-roll before the first pour
+    startS: events.length ? Math.min(0, ...events.map(e => e.atS)) : 0,   // negative = pre-roll before the first pour
     endS: groups.length ? groups[groups.length - 1].atS : 0,
     events,
     skipped,
@@ -124,7 +140,8 @@ export function schedule(recipe, { rig = null, cueLeadS } = {}) {
 // ---------- reading a schedule while brewing ----------
 
 // What the coach screen shows at brew time tS.
-// → { next, secondsToNext, countdown, last, done }
+// → { next, secondsToNext, countdown, last, done, prep }
+//   prep: the upcoming step's prep reminder, from the reminder until the step, else null
 //   next: the upcoming fire event (null when done)   countdown: 3 / 2 / 1 while cueing, else null
 export function stateAt(sched, tS) {
   const events = sched?.events ?? [];
@@ -139,6 +156,7 @@ export function stateAt(sched, tS) {
     countdown: cue ? Math.max(1, Math.ceil(cue.fireAtS - tS - EPS)) : null,
     last,
     done: next === null,
+    prep: events.find(e => e.kind === 'prep' && e.atS <= tS + EPS && tS < e.fireAtS - EPS) ?? null,
   };
 }
 
@@ -208,7 +226,7 @@ function eventsForAction(a, atS, tap, fire) {
   switch (a.type) {
     case 'pour':
       return { ...base, type: 'pour', volumeMl: a.volumeMl, tempC: a.tempC, style: a.style, flowRate: a.flowRate,
-        dripAssist: Boolean(a.dripAssist), valve: a.closesValve ? 'closed' : 'open' };
+        dripAssist: Boolean(a.dripAssist), tareBefore: Boolean(a.tareBefore), valve: a.closesValve ? 'closed' : 'open' };
     case 'open-valve': return { ...base, type: 'valve', state: 'open', trigger: 'planned' };
     case 'swirl': return { ...base, type: 'swirl', count: a.count };
     case 'cut': return { ...base, type: 'cut' };
@@ -318,12 +336,14 @@ export function tapDrift(sched, timeline) {
 // Every buzz moment (countdown tick or fire) in (fromS, toS], in order.
 // The adapter calls this each frame with the previous and current time, so each moment
 // is signalled exactly once however uneven the frames are.
-// → [{ atS, type: 'tick', n, label } | { atS, type: 'fire', label }]
+// → [{ atS, type: 'tick', n, label } | { atS, type: 'prep', label } | { atS, type: 'fire', label }]
 export function buzzesBetween(sched, fromS, toS) {
   const out = [];
   for (const e of sched?.events ?? []) {
     if (e.kind === 'cue') {
       for (const t of e.ticks) if (t.atS > fromS + EPS && t.atS <= toS + EPS) out.push({ atS: t.atS, type: 'tick', n: t.n, label: e.label });
+    } else if (e.kind === 'prep') {
+      if (e.buzz && e.atS > fromS + EPS && e.atS <= toS + EPS) out.push({ atS: e.atS, type: 'prep', label: e.label });
     } else if (e.atS > fromS + EPS && e.atS <= toS + EPS) {
       out.push({ atS: e.atS, type: 'fire', label: e.label });
     }

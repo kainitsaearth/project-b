@@ -148,6 +148,20 @@ export function valveSteeps(plan) {
   return { perStep, steeps };
 }
 
+// ---------- prep before a pour ----------
+
+export const PREP = Object.freeze({ PUT_ON_DRIP_ASSIST: 'PUT ON DRIP ASSIST', REMOVE_DRIP_ASSIST: 'REMOVE DRIP ASSIST', TARE: 'TARE SCALE' });
+
+// What to get ready before a pour, in the order you'd do it: the drip assist goes on (or off)
+// first, then tare, so the scale doesn't count the device.
+export function prepItems(prevPour, pour) {
+  const items = [];
+  if (pour?.dripAssist && !prevPour?.dripAssist) items.push(PREP.PUT_ON_DRIP_ASSIST);
+  if (!pour?.dripAssist && prevPour?.dripAssist) items.push(PREP.REMOVE_DRIP_ASSIST);
+  if (pour?.tareBefore) items.push(PREP.TARE);
+  return items;
+}
+
 // ---------- derived fields ----------
 
 // Recomputes everything derived from the plan. Never typed by hand:
@@ -165,12 +179,15 @@ export function normalizeRecipe(recipe) {
 
   let running = 0;
   let broken = false;
+  let sinceTare = 0;
+  let prevPour = null;
   const plan = migrated.map((a, i) => {
     const v = perStep[i];
     const step = { ...a, seq: i + 1, valveState: v.valveState, valveClosedByStep: v.steepStep, valveClosedUntilS: v.closedUntilS };
     if (v.startsSteep) step.closedForS = isNum(v.closedUntilS) && isNum(a.atS) ? v.closedUntilS - a.atS : null;
     else delete step.closedForS;
     if (a.action === 'pour') {
+      if (a.tareBefore) sinceTare = 0;
       if (!broken && isNum(a.volumeMl) && a.volumeMl > 0) {
         running += a.volumeMl;
         step.cumulativeMl = running;
@@ -178,6 +195,12 @@ export function normalizeRecipe(recipe) {
         broken = true;
         step.cumulativeMl = null;
       }
+      // What the scale should read at the end of this pour (restarts at 0 after a tare).
+      if (sinceTare !== null && isNum(a.volumeMl) && a.volumeMl > 0) sinceTare += a.volumeMl;
+      else sinceTare = null;
+      step.scaleMl = sinceTare;
+      step.prep = prepItems(prevPour, a);
+      prevPour = a;
     }
     return step;
   });

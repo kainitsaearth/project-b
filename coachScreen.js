@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=13';
-import * as model from './model.js?v=13';
-import * as recipeLib from './recipe.js?v=13';
-import * as C from './coach.js?v=13';
+import { h } from './dom.js?v=15';
+import * as model from './model.js?v=15';
+import * as recipeLib from './recipe.js?v=15';
+import * as C from './coach.js?v=15';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {
@@ -26,18 +26,22 @@ const signed = d => {
   return r > 0 ? `+${r.toFixed(1)}` : r < 0 ? r.toFixed(1) : '0.0';   // never "−0.0"
 };
 
-function stepDetail(fire) {
-  return fire.actions.map(a => {
-    if (a.type !== 'pour') return null;
-    return [
-      a.volumeMl != null ? `${a.volumeMl} ml → ${a.cumulativeMl ?? '?'} g on scale` : null,
-      a.tempC != null ? `${a.tempC} °C` : null,
-      a.flowRate != null ? `flow ${a.flowRate}` : null,
-      a.dripAssist ? 'with drip assist' : null,
-      a.style || null,
-      a.valve ? `valve ${a.valve}` : null,
-    ].filter(Boolean).join(' · ');
-  }).filter(Boolean).join(' | ');
+// The numbers for a step as boxes: one row of tiles per pour.
+function stepTiles(fire, { compact = false } = {}) {
+  const pours = (fire?.actions ?? []).filter(a => a.type === 'pour');
+  if (!pours.length) return null;
+  const tile = (label, value, extra) => h('div', { class: 'tile', 'data-tile': label.toLowerCase().replace(/\s+/g, '-') },
+    h('span', { class: 'tile-label' }, label),
+    h('span', { class: 'tile-value' }, value),
+    extra ? h('span', { class: 'tile-extra' }, extra) : null);
+  return h('div', { class: `coach-tiles${compact ? ' compact' : ''}` }, pours.map(a => h('div', { class: 'tile-row' },
+    tile('Pour', a.volumeMl != null ? `${a.volumeMl} ml` : '?'),
+    tile('Scale', a.scaleMl != null ? `${a.scaleMl} g` : '?', a.tareBefore ? 'tared' : null),
+    a.tempC != null ? tile('Temp', `${a.tempC}°`) : null,
+    a.flowRate != null ? tile('Flow', String(a.flowRate), '/10') : null,
+    a.style ? tile('Style', a.style) : null,
+    a.valve ? tile('Valve', a.valve) : null,
+    a.dripAssist ? tile('Drip assist', 'on') : null)));
 }
 
 // ---------- signals: vibration, sound, and a record for checks ----------
@@ -72,8 +76,12 @@ function createSignals(settings) {
     play(kind) {
       const s = settings();
       window.__coachSignals?.push(kind);
-      if (s.vibration && navigator.vibrate) navigator.vibrate(kind === 'fire' ? [250] : kind === 'tap' ? [25] : [70]);
-      if (s.sound) beep(kind === 'fire' ? 1320 : kind === 'tap' ? 520 : 880, kind === 'fire' ? 0.25 : 0.07);
+      // prep = double buzz: clearly not a countdown tick and not a cue
+      if (s.vibration && navigator.vibrate) navigator.vibrate(kind === 'fire' ? [250] : kind === 'tap' ? [25] : kind === 'prep' ? [150, 120, 150] : [70]);
+      if (s.sound) {
+        if (kind === 'prep') { beep(660, 0.12); setTimeout(() => beep(660, 0.12), 270); }
+        else beep(kind === 'fire' ? 1320 : kind === 'tap' ? 520 : 880, kind === 'fire' ? 0.25 : 0.07);
+      }
     },
   };
 }
@@ -115,6 +123,7 @@ export function coachScreen(initialState, recipe, actions) {
   // ---- idle: the plan, settings, START ----
   function idleView() {
     const other = state.activeBrew && !mine() ? state.recipes[state.activeBrew.recipeId] : null;
+    const firstPrep = fires[0] ? sched.events.find(e => e.kind === 'prep' && e.fireAtS === fires[0].atS) : null;
     const s = settings();
     const toggle = (key, label) => h('label', { class: 'toggle' },
       h('input', { type: 'checkbox', id: `coach-${key}`, checked: s[key], onchange: ev => actions.setCoachSetting(key, ev.target.checked) }),
@@ -126,10 +135,14 @@ export function coachScreen(initialState, recipe, actions) {
         h('h2', {}, model.displayName('recipes', recipe)),
         h('span', { class: 'badge badge-version' }, `v${recipe.version ?? 1}`)),
       h('p', { class: 'list-sub' }, `${model.displayName('rigs', rig)} · ${fires.length} cues · ${recipeLib.formatClock(sched.endS)}`),
-      h('ol', { class: 'coach-plan', id: 'coach-plan' }, fires.map(f => h('li', {},
-        h('span', { class: 'coach-plan-time' }, recipeLib.formatClock(f.atS)),
-        h('span', { class: 'coach-plan-label' }, f.label),
-        stepDetail(f) ? h('small', { class: 'field-hint' }, stepDetail(f)) : null))),
+      h('ol', { class: 'coach-plan', id: 'coach-plan' }, fires.map(f => {
+        const prep = sched.events.find(e => e.kind === 'prep' && e.fireAtS === f.atS);
+        return h('li', {},
+          h('span', { class: 'coach-plan-time' }, recipeLib.formatClock(f.atS)),
+          h('span', { class: 'coach-plan-label' }, f.label),
+          prep ? h('small', { class: 'coach-plan-prep' }, `Before: ${prep.label}${f === fires[0] ? ' (before you tap)' : prep.buzz ? ` (reminder at ${clock(prep.atS)})` : ' (no room for a reminder buzz)'}`) : null,
+          stepTiles(f, { compact: true }));
+      })),
       sched.skipped.length ? h('p', { class: 'field-hint' }, `Not cued: ${sched.skipped.map(x => `step ${x.seq} (${x.reason})`).join(', ')}`) : null,
       h('div', { class: 'coach-settings' },
         toggle('vibration', 'Vibration'),
@@ -145,21 +158,38 @@ export function coachScreen(initialState, recipe, actions) {
         ? h('div', { class: 'alert alert-danger' },
             h('strong', {}, 'Another brew is in progress'),
             h('a', { class: 'btn', href: `#/brew/${encodeURIComponent(other.id)}` }, `Resume ${model.displayName('recipes', other)}`))
-        : h('button', { type: 'button', class: 'btn btn-primary coach-start', id: 'coach-start', onclick: () => {
-            signals.unlock();
-            // t = startS (the pre-roll, e.g. −3 s) at the moment of pressing START
-            actions.startBrew(recipe.id, Date.now() + (-sched.startS * 1000) / SPEED);
-            keepAwake();
-          } }, 'START'),
-      h('p', { class: 'field-hint' }, `The countdown starts ${sched.cueLeadS} s before the first pour. The screen stays awake while brewing.`),
-      s.countIn ? h('p', { class: 'field-hint' }, `Count-in: pressing a pour counts ${C.POUR_COUNT_IN_S} → 1 and records the pour at the end. Press when the countdown starts and you'll pour right on time. CANCEL stops it.`) : null);
+        : [
+            firstPrep ? h('div', { class: 'coach-prep', id: 'coach-first-prep' }, `▲ Before you tap: ${firstPrep.label}`) : null,
+            h('button', { type: 'button', class: 'coach-tap coach-start', id: 'coach-start', disabled: !fires.length, onclick: () => {
+              signals.unlock();
+              signals.play('tap');
+              // The clock starts at this tap. With the count-in, the tap is 3 s before the first step,
+              // so the first pour lands exactly on its planned time.
+              const first = fires[0];
+              const leadS = settings().countIn && first.actions.some(a => a.type === 'pour') ? C.POUR_COUNT_IN_S : 0;
+              const tapAtS = first.atS - leadS;
+              actions.startBrew(recipe.id, Date.now() - (tapAtS * 1000) / SPEED, { tapAtS, countInS: leadS });
+              keepAwake();
+            } }, fires[0]?.label ?? 'START'),
+          ],
+      h('p', { class: 'field-hint' }, s.countIn
+        ? `Tap the button when you're ready: it counts ${C.POUR_COUNT_IN_S} → 1 and the clock starts as you pour. Later pours count in the same way; press when the amber countdown starts and you'll pour on time. CANCEL stops a count.`
+        : 'Tap the button as you pour: the clock starts then. The screen stays awake while brewing.'));
   }
 
   // ---- running ----
   const clockEl = h('div', { class: 'coach-clock', id: 'coach-clock' });
+  const prepEl = h('div', { class: 'coach-prep', id: 'coach-prep', hidden: true });
   const countEl = h('div', { class: 'coach-count', id: 'coach-count' });
   const nowEl = h('div', { class: 'coach-now', id: 'coach-now' });
   const detailEl = h('div', { class: 'coach-detail', id: 'coach-detail' });
+  const tilesEl = h('div', { class: 'coach-tiles-slot', id: 'coach-tiles' });
+  let tilesFor = undefined;   // which fire the tiles show, so they aren't rebuilt every frame
+  const showTiles = fire => {
+    if (fire === tilesFor) return;
+    tilesFor = fire;
+    tilesEl.replaceChildren(...[fire ? stepTiles(fire) : null].filter(Boolean));
+  };
   const nextEl = h('div', { class: 'coach-next', id: 'coach-next' });
   const press = which => {
     const t = tNow();
@@ -176,14 +206,18 @@ export function coachScreen(initialState, recipe, actions) {
   const doneEl = h('ol', { class: 'coach-done', id: 'coach-done' });
 
   function runningView() {
+    tilesFor = undefined;
     return h('div', { class: 'coach-run' },
       h('div', { class: 'coach-top' },
-        clockEl,
+        nowEl,
         h('button', { type: 'button', class: 'btn btn-small', id: 'coach-discard', onclick: () => {
           if (confirm('Discard this brew? Its taps will be lost.')) actions.discardBrew();
         } }, 'Discard')),
-      countEl, nowEl, detailEl, nextEl,
-      tapBtn,
+      prepEl, tilesEl, detailEl, nextEl,
+      // The clock and the countdown sit on the button, so one glance covers all three.
+      h('div', { class: 'coach-tapzone' },
+        tapBtn,
+        h('div', { class: 'coach-tapinfo', 'aria-hidden': 'true' }, clockEl, countEl)),
       h('div', { class: 'coach-secondary' }, undoBtn, valveBtn, drawdownBtn, cutBtn),
       h('h3', { class: 'section-title' }, 'Tapped'),
       doneEl);
@@ -210,6 +244,11 @@ export function coachScreen(initialState, recipe, actions) {
 
     el.dataset.t = t.toFixed(2);
     el.dataset.countIn = pending ? String(pending.countdown) : '';
+    // Prep reminder: from its buzz until the pour. During a count-in, the pending pour's prep.
+    const pendingFire = pending ? fires[ab.timeline.find(e => e.tap === pending.tap)?.fire] : null;
+    const prep = pendingFire ? sched.events.find(e => e.kind === 'prep' && e.fireAtS === pendingFire.atS) ?? null : st.prep;
+    prepEl.hidden = !prep;
+    prepEl.textContent = prep ? `▲ ${prep.label}` : '';
     clockEl.textContent = clock(t);
     if (!pending && wasPending) paintDone();
     wasPending = Boolean(pending);
@@ -226,7 +265,8 @@ export function coachScreen(initialState, recipe, actions) {
       tapBtn.dataset.kind = 'count-in';
       tapBtn.disabled = true;
       nowEl.textContent = fire ? fire.label : 'POUR';
-      detailEl.textContent = fire ? stepDetail(fire) : '';
+      detailEl.textContent = '';
+      showTiles(fire ?? null);
       nextEl.textContent = 'Tap CANCEL to stop';
       if (valveBtn) valveBtn.hidden = true;
       drawdownBtn.hidden = true;
@@ -247,7 +287,10 @@ export function coachScreen(initialState, recipe, actions) {
     const focus = st.countdown !== null ? st.next : exp.kind === 'action' ? exp.fire : null;
     nowEl.textContent = focus ? `${recipeLib.formatClock(focus.atS)} · ${focus.label}`
       : exp.kind === 'pour-done' ? 'Pouring…' : exp.kind === 'drawdown-complete' ? 'Drawdown' : '';
-    detailEl.textContent = focus ? stepDetail(focus)
+    // While pouring, the tiles keep showing that pour's numbers (the scale target is what you watch).
+    const pouring = exp.kind === 'pour-done' ? fires[ts.fireIndex - 1] ?? null : null;
+    showTiles(focus ?? pouring);
+    detailEl.textContent = focus ? ''
       : exp.kind === 'pour-done' ? 'Tap POUR DONE when you stop pouring (optional)'
       : exp.kind === 'drawdown-complete' ? 'Tap DRAWDOWN DONE when the bed is dry' : '';
     const after = st.next ? fires[fires.indexOf(st.next) + 1] : null;

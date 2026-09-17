@@ -1,10 +1,10 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=13';
-import * as recipeLib from './recipe.js?v=13';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=13';
-import { h, row, fmt, toNum } from './dom.js?v=13';
-import { coachScreen, brewSavedScreen } from './coachScreen.js?v=13';
+import * as model from './model.js?v=15';
+import * as recipeLib from './recipe.js?v=15';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=15';
+import { h, row, fmt, toNum } from './dom.js?v=15';
+import { coachScreen, brewSavedScreen } from './coachScreen.js?v=15';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -482,6 +482,10 @@ export function createUI(view, tabs, actions) {
           h('input', { type: 'checkbox', id: inputId('dripAssist'), disabled: frozen, checked: Boolean(a.dripAssist),
             onchange: ev => set('dripAssist', ev.target.checked) }),
           h('span', { class: 'mini-label' }, 'With drip assist')),
+        h('label', { class: 'toggle toggle-mini' },
+          h('input', { type: 'checkbox', id: inputId('tareBefore'), disabled: frozen, checked: Boolean(a.tareBefore),
+            onchange: ev => set('tareBefore', ev.target.checked) }),
+          h('span', { class: 'mini-label' }, 'Tare before')),
       ];
     } else if (a.action === 'swirl') {
       body = [num('count', 'Swirls')];
@@ -529,7 +533,11 @@ export function createUI(view, tabs, actions) {
       const s = r.plan.find(x => x.id === a.id);
       if (!s) return;
       if (s.action === 'pour') {
-        cumulative.textContent = s.cumulativeMl != null ? `→ ${fmt(s.cumulativeMl)} ml on the scale` : '→ ? ml on the scale';
+        const tare = card.querySelector(`#${CSS.escape(inputId('tareBefore'))}`);
+        if (tare) tare.checked = Boolean(s.tareBefore);
+        cumulative.textContent = (s.prep?.length ? `Before: ${s.prep.map(x => x.toLowerCase()).join(', ')} · ` : '')
+          + (s.scaleMl != null ? `→ ${fmt(s.scaleMl)} ml on the scale` : '→ ? ml on the scale')
+          + (s.scaleMl != null && s.cumulativeMl != null && s.scaleMl !== s.cumulativeMl ? ` (${fmt(s.cumulativeMl)} ml total)` : '');
       }
 
       // Inside someone else's steep: no own valve choice, just say so.

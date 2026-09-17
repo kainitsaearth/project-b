@@ -3,12 +3,12 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=13';
-import * as model from './model.js?v=13';
-import * as recipeLib from './recipe.js?v=13';
-import * as coachLib from './coach.js?v=13';
-import * as timelineLib from './timeline.js?v=13';
-import { createUI } from './ui.js?v=13';
+import * as store from './store.js?v=15';
+import * as model from './model.js?v=15';
+import * as recipeLib from './recipe.js?v=15';
+import * as coachLib from './coach.js?v=15';
+import * as timelineLib from './timeline.js?v=15';
+import { createUI } from './ui.js?v=15';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -214,6 +214,8 @@ export const actions = {
     return editRecipe(id, r => {
       const step = r.plan.find(a => a.id === stepId);
       if (step) step[key] = value;
+      // A drip assist sits on the scale: turning it on also tares before that pour (switchable back off).
+      if (step && key === 'dripAssist' && value === true) step.tareBefore = true;
     });
   },
   addStep(id, action) {
@@ -259,11 +261,15 @@ export const actions = {
   setCoachSetting(key, value) {
     mutate(s => { s.meta.coach = { ...(s.meta.coach ?? {}), [key]: value }; });
   },
-  startBrew(recipeId, startedAtMs) {
+  // startedAtMs = wall clock at brew time 0. With tapAtS the first step's tap is recorded in the
+  // same save, so the brew and its first pour can't be split by the app being killed.
+  startBrew(recipeId, startedAtMs, { tapAtS = null, countInS = 0 } = {}) {
     const recipe = state.recipes[recipeId];
     if (!recipe || state.activeBrew) return false;
     if (recipeLib.validateRecipe(recipe, state.rigs[recipe.rigId]).length) return false;
-    mutate(s => { s.activeBrew = { id: model.uid('brew'), recipeId, startedAtMs, timeline: [] }; });
+    const sched = scheduleFor(recipeId);
+    const timeline = tapAtS === null ? [] : coachLib.applyTap(sched, [], tapAtS, 'main', { countInS });
+    mutate(s => { s.activeBrew = { id: model.uid('brew'), recipeId, startedAtMs, timeline }; });
     flush();   // a started brew must survive the app being killed in the next second
     return true;
   },
@@ -324,7 +330,7 @@ function finishBrew() {
   if (!recipe) return;
   const sched = scheduleFor(recipe.id);
   const analysis = timelineLib.analyzeBrew(recipe, brew.timeline);
-  const started = new Date(brew.startedAtMs - (sched.startS * 1000));   // wall clock at brew time 0
+  const started = new Date(brew.startedAtMs);   // wall clock at brew time 0
   const date = localISODate(started);
   const sessionId = `session-${date}`;
   const record = {
@@ -375,7 +381,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=13').then(m => m.runTests());
+    import('./tests.js?v=15').then(m => m.runTests());
   }
 }
 
