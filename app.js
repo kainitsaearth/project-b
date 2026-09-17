@@ -3,14 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=16';
-import * as model from './model.js?v=16';
-import * as recipeLib from './recipe.js?v=16';
-import * as coachLib from './coach.js?v=16';
-import * as timelineLib from './timeline.js?v=16';
-import * as brewLib from './brew.js?v=16';
-import { daysOffRoast } from './compute.js?v=16';
-import { createUI } from './ui.js?v=16';
+import * as store from './store.js?v=17';
+import * as model from './model.js?v=17';
+import * as recipeLib from './recipe.js?v=17';
+import * as coachLib from './coach.js?v=17';
+import * as timelineLib from './timeline.js?v=17';
+import * as brewLib from './brew.js?v=17';
+import * as assessLib from './assessment.js?v=17';
+import { daysOffRoast } from './compute.js?v=17';
+import { createUI } from './ui.js?v=17';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -158,7 +159,7 @@ function seed() {
 
 // ---------- routing ----------
 
-const ROUTE = /^#\/(recipes|beans|rigs|waters|setup|brew|result)(?:\/([^/]+))?$/;
+const ROUTE = /^#\/(recipes|beans|rigs|waters|setup|brew|result|assess)(?:\/([^/]+))?$/;
 
 function currentRoute() {
   const m = ROUTE.exec(location.hash);
@@ -327,6 +328,27 @@ export const actions = {
     return false;
   },
 
+  // ---- assessment (Step 9) ----
+  // Saved as you tap. A brew's assessment starts EMPTY — never copied from another brew.
+  setAssessment(brewId, path, value) {
+    return actions.editBrew(brewId, b => ({ ...b, assessment: assessLib.setField(b.assessment ?? assessLib.createAssessment(), path, value) }));
+  },
+  submitAssessment(brewId) {
+    let ok = false;
+    actions.editBrew(brewId, b => {
+      const next = assessLib.submit(b.assessment ?? assessLib.createAssessment(), new Date().toISOString());
+      ok = Boolean(next.submittedAt);
+      return { ...b, assessment: next };
+    });
+    if (!ok) return false;
+    flush();
+    navigate(`#/result/${encodeURIComponent(brewId)}`);
+    return true;
+  },
+  setAssessmentPref(key, value) {
+    mutate(s => { s.meta.assessment = { ...(s.meta.assessment ?? {}), [key]: value }; });
+  },
+
   // startedAtMs = wall clock at brew time 0. With tapAtS the first step's tap is recorded in the
   // same save, so the brew and its first pour can't be split by the app being killed.
   startBrew(recipeId, startedAtMs, { tapAtS = null, countInS = 0 } = {}) {
@@ -465,7 +487,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=16').then(m => m.runTests());
+    import('./tests.js?v=17').then(m => m.runTests());
   }
 }
 

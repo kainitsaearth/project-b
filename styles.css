@@ -398,3 +398,38 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
 .reconcile-pour { display: grid; grid-template-columns: 3rem 3.5rem 1fr 1fr; align-items: end; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); }
 .reconcile-time { font-variant-numeric: tabular-nums; font-weight: 700; padding-bottom: 10px; }
 .reconcile-name { font-weight: 600; padding-bottom: 10px; }
+
+/* ---------- assessment (Step 9) ---------- */
+
+.assess-temp { display: flex; flex-direction: column; gap: 10px; }
+.assess-q { display: flex; flex-direction: column; gap: 6px; }
+.assess-cat { font-weight: 700; }
+.choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; }
+.choice-btn { min-height: 56px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font: inherit; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.choice-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.choice-btn.choice-yes[aria-pressed="true"], .choice-btn.choice-over[aria-pressed="true"], .choice-btn.choice-under[aria-pressed="true"] { background: var(--danger); color: var(--danger-fg); border-color: var(--danger); }
+.choice-btn.choice-unsure[aria-pressed="true"] { background: var(--warn); color: #1b1a18; border-color: var(--warn); }
+.choice-btn.choice-no[aria-pressed="true"], .choice-btn.choice-in[aria-pressed="true"] { background: var(--ok); color: #fff; border-color: var(--ok); }
+.assess-tally { padding: 12px 14px; border-radius: var(--radius); font-weight: 800; text-align: center; border: 1px solid var(--border); background: var(--surface); }
+.assess-tally[data-level="loses"], .assess-tally.level-loses { border-color: var(--danger); color: var(--danger); }
+.assess-tally[data-level="survivable"], .assess-tally.level-survivable { border-color: var(--warn); color: var(--warn); }
+.assess-tally[data-level="target"], .assess-tally.level-target { border-color: var(--ok); color: var(--ok); }
+.cooled-timer { padding: 12px 14px; border-radius: var(--radius); background: var(--surface); border: 1px dashed var(--border); font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
+.cooled-timer.due { background: var(--cue, #f9a825); color: #1b1a18; border-style: solid; font-size: 1.25rem; }
+.inline-field { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+.inline-field input { max-width: 6rem; }
+
+.reveal { display: flex; flex-direction: column; gap: 10px; }
+table.answers, table.drift { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+table.answers th, table.answers td, table.drift th, table.drift td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+table.answers tr.at-risk th { color: var(--danger); }
+td.ans-yes { color: var(--danger); font-weight: 800; }
+td.ans-unsure { color: var(--warn); font-weight: 700; }
+table.drift tr.total th, table.drift tr.total td { font-weight: 800; }
+td.flag-short, td.flag-long { color: var(--danger); font-weight: 800; }
+td.flag-on { color: var(--ok); font-weight: 700; }
+td.flag-cut, td.flag-live { color: var(--muted); }
+.attribution { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--accent); }
+.attribution-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.attribution-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.drift-badge { color: var(--danger); font-weight: 800; }

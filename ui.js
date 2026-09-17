@@ -1,11 +1,12 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=16';
-import * as recipeLib from './recipe.js?v=16';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=16';
-import { h, row, fmt, toNum } from './dom.js?v=16';
-import { coachScreen } from './coachScreen.js?v=16';
-import { setupScreen, setupKey, resultScreen } from './brewScreens.js?v=16';
+import * as model from './model.js?v=17';
+import * as recipeLib from './recipe.js?v=17';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=17';
+import { h, row, fmt, toNum } from './dom.js?v=17';
+import { coachScreen } from './coachScreen.js?v=17';
+import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=17';
+import { assessScreen, assessKey } from './assessScreen.js?v=17';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -45,9 +46,10 @@ export function createUI(view, tabs, actions) {
     if (rigPrompt && rigPrompt.recipeId !== route.id) rigPrompt = null;
 
     // The coach owns its screen: tabs hidden, its own frame loop, refreshed (never rebuilt) on taps.
-    const fullScreen = route.kind === 'brew' || route.kind === 'result' || route.kind === 'setup';
+    const fullScreen = ['brew', 'result', 'setup', 'assess'].includes(route.kind);
     tabs.hidden = fullScreen;
     if (route.kind !== 'brew' && coach) { coach.destroy(); coach = null; }
+    if (!['result', 'setup', 'assess'].includes(route.kind) && flow) { flow.destroy?.(); flow = null; }
     if (route.kind === 'brew') {
       const key = `brew/${route.id}`;
       if (coach && mountedKey === key) { coach.refresh(state); return; }
@@ -62,17 +64,22 @@ export function createUI(view, tabs, actions) {
       scrollTo(0, 0);
       return;
     }
-    if (route.kind === 'result' || route.kind === 'setup') {
-      const key = route.kind === 'setup' ? setupKey(state, route.id) : `result/${route.id}`;
+    if (route.kind === 'result' || route.kind === 'setup' || route.kind === 'assess') {
+      const key = route.kind === 'setup' ? setupKey(state, route.id)
+        : route.kind === 'assess' ? assessKey(state, route.id) : resultKey(state, route.id);
       if (flow && mountedKey === key) { flow.refresh(state); return; }
       const sameScreen = mountedKey?.split('|')[0] === key.split('|')[0];
+      flow?.destroy?.();
       mountedKey = key;
       refreshDerived = null;
-      flow = route.kind === 'setup' ? setupScreen(state, route.id, actions) : resultScreen(state, route.id, actions);
+      flow = route.kind === 'setup' ? setupScreen(state, route.id, actions)
+        : route.kind === 'assess' ? assessScreen(state, route.id, actions)
+        : resultScreen(state, route.id, actions);
       view.replaceChildren(flow.el);
       if (!sameScreen) scrollTo(0, 0);
       return;
     }
+    flow?.destroy?.();
     flow = null;
     renderTabs(route.kind);
 

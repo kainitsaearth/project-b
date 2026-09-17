@@ -160,7 +160,10 @@ export function outcomes(brew) {
   const hasOut = isNum(out) && out >= 0;
   const retentionMl = inMl !== UNKNOWN && hasOut && inMl - out >= 0 ? round1(inMl - out) : UNKNOWN;
   const trueRatio = hasOut && out > 0 && isNum(brew?.doseG) && brew.doseG > 0 ? out / brew.doseG : UNKNOWN;
-  return { waterInMl: inMl, retentionMl, trueRatio };
+  // As a share of the water poured over the bed. Bypass never touches the coffee, so it's left out.
+  const pouredMl = inMl === UNKNOWN ? UNKNOWN : inMl - (brew.bypassG ?? 0);
+  const retentionPct = retentionMl !== UNKNOWN && pouredMl !== UNKNOWN && pouredMl > 0 ? round1((retentionMl / pouredMl) * 100) : UNKNOWN;
+  return { waterInMl: inMl, retentionMl, retentionPct, trueRatio };
 }
 const round1 = n => Math.round(n * 10) / 10;
 
@@ -187,7 +190,7 @@ export function setMeasured(brew, key, value) {
 
 export function withOutcomes(brew) {
   const o = outcomes(brew);
-  return { ...brew, waterInMl: o.waterInMl, retentionMl: o.retentionMl, trueRatio: o.trueRatio };
+  return { ...brew, waterInMl: o.waterInMl, retentionMl: o.retentionMl, retentionPct: o.retentionPct, trueRatio: o.trueRatio };
 }
 
 // A reconciliation check: pours with no readable volume, and no output yet.

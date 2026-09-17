@@ -1,12 +1,13 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=16';
-import * as model from './model.js?v=16';
-import * as R from './recipe.js?v=16';
-import * as T from './timeline.js?v=16';
-import * as C from './coach.js?v=16';
-import * as Bw from './brew.js?v=16';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=17';
+import * as model from './model.js?v=17';
+import * as R from './recipe.js?v=17';
+import * as T from './timeline.js?v=17';
+import * as C from './coach.js?v=17';
+import * as Bw from './brew.js?v=17';
+import * as As from './assessment.js?v=17';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -950,20 +951,79 @@ export function runTests(log = console) {
     const brew = { doseG: 17, bypassG: null, outputMl: null, timeline: [
       { type: 'pour', atS: 0, volumeMl: 50, tempC: 92, tap: 1 }, { type: 'valve', atS: 40, tap: 2 },
       { type: 'pour', atS: 45, volumeMl: 100, tempC: 92, tap: 3 }, { type: 'pour', atS: 80, volumeMl: 60, tempC: 84, tap: 4 }] };
-    eq('reconcile: outcomes unknown until output is entered', Bw.outcomes(brew), { waterInMl: 210, retentionMl: Bw.UNKNOWN, trueRatio: Bw.UNKNOWN });
+    eq('reconcile: outcomes unknown until output is entered', Bw.outcomes(brew), { waterInMl: 210, retentionMl: Bw.UNKNOWN, retentionPct: Bw.UNKNOWN, trueRatio: Bw.UNKNOWN });
     let r = Bw.setMeasured(brew, 'outputMl', 180);
     eq('reconcile: retention and true ratio computed', [r.waterInMl, r.retentionMl, Math.round(r.trueRatio * 100) / 100], [210, 30, 10.59]);
     r = Bw.reconcilePour(r, 1, 'volumeMl', 110);
     eq('reconcile: correcting pour 2 changes water in, keeps its time', [r.waterInMl, r.retentionMl, r.timeline[2].atS, r.timeline[2].reconciled], [220, 40, 45, true]);
     eq('reconcile: only the chosen pour changes', r.timeline.map(e => e.volumeMl ?? null), [50, null, 110, 60]);
+    eq('retention %: of the water poured over the bed (40 of 220 ml)', r.retentionPct, 18.2);
     r = Bw.setMeasured(r, 'bypassG', 20);
     eq('reconcile: bypass counts as water in', r.waterInMl, 240);
+    eq('retention %: bypass is left out of the %, it never touched the bed (60 of 220 ml)', [r.retentionMl, r.retentionPct], [60, 27.3]);
     eq('reconcile: output above water in → retention unknown', Bw.setMeasured(r, 'outputMl', 300).retentionMl, Bw.UNKNOWN);
     eq('reconcile: a blanked pour volume → water in unknown', Bw.reconcilePour(r, 0, 'volumeMl', null).waterInMl, Bw.UNKNOWN);
     eq('reconcile: times and other fields are not editable through it', [Bw.reconcilePour(r, 0, 'atS', 5).timeline[0].atS, Bw.setMeasured(r, 'doseG', 99).doseG], [0, 17]);
     eq('reconcile: issues until output is in', Bw.reconcileIssues(brew), ['Output not entered']);
     eq('reconcile: none once reconciled', Bw.reconcileIssues(r), []);
     eq('reconcile: pure — the input brew is untouched', brew.timeline[2].volumeMl, 100);
+  }
+
+  // ================= assessment + score-then-reveal (assessment.js) =================
+  {
+    const fresh = As.createAssessment();
+    eq('assessment: starts empty — nothing answered, not submitted', [As.tally(fresh).answered, fresh.window, fresh.quality10, fresh.submittedAt], [0, null, null, null]);
+
+    let a = fresh;
+    for (const [p, v] of [['hot.flavor', 'no'], ['hot.sweetAcid', 'unsure'], ['hot.balance', 'no'], ['cooled.flavor', 'no'], ['cooled.sweetAcid', 'no'], ['cooled.balance', 'yes']]) a = As.setField(a, p, v);
+    const t = As.tally(a);
+    eq('tally: yes or unsure = at risk; a category is at risk at EITHER temperature', [t.hot, t.cooled, t.atRisk, t.categories], [1, 1, 2, { flavor: false, sweetAcid: true, balance: true }]);
+    eq('verdict: 0 target · 1 survivable · 2+ loses the round', [0, 1, 2, 3].map(n => As.verdict(n).level), ['target', 'survivable', 'loses', 'loses']);
+
+    eq('edit: invalid answers are refused', As.setField(a, 'hot.flavor', 'maybe').hot.flavor, 'no');
+    eq('edit: unknown category refused', As.setField(a, 'hot.aroma', 'yes'), a);
+    eq('edit: quality must be a whole 1–10', [As.setField(a, 'quality10', 11).quality10, As.setField(a, 'quality10', 6.5).quality10, As.setField(a, 'quality10', 7).quality10], [null, null, 7]);
+    eq('edit: pure — the input is untouched', fresh.hot.flavor, null);
+
+    eq('submit: blocked until the window is chosen', As.submitIssues(a), ['Window: under, in or over']);
+    eq('submit: refused while incomplete (no submittedAt)', As.submit(a, 'T').submittedAt, null);
+    a = As.setField(a, 'window', 'over');
+    eq('submit: complete → stamped', As.submit(a, '2026-09-17T10:00:00Z').submittedAt, '2026-09-17T10:00:00Z');
+    eq('submit: re-submitting keeps the first time', As.submit({ ...a, submittedAt: 'FIRST' }, 'LATER').submittedAt, 'FIRST');
+
+    let s = As.setField(As.setField(As.setField(As.setField(fresh, 'hot.flavor', 'no'), 'hot.sweetAcid', 'no'), 'hot.balance', 'no'), 'window', 'in');
+    eq('cooled: required unless marked not tasted', As.submitIssues(s).length, 3);
+    s = As.setField(As.setField(s, 'cooled.flavor', 'yes'), 'cooledSkipped', true);
+    eq('cooled: "didn\'t taste it cooled" clears cooled answers and allows submit', [s.cooled.flavor, As.submitIssues(s), As.tally(s).answered], [null, [], 3]);
+    eq('cooled: answering one un-skips it', As.setField(s, 'cooled.balance', 'no').cooledSkipped, false);
+
+    // The gate
+    const brewA = { phases: { bloom: 5, percolation: 35, drawdown: 70 },
+      drift: { phases: { bloom: { flag: 'on' }, percolation: { flag: 'long' }, drawdown: { flag: 'short' } }, total: { flag: 'on' } },
+      assessment: { ...a, submittedAt: null } };
+    eq('REVEAL GATE: nothing revealed before submit', [As.revealed(brewA), As.attributionOptions(brewA)], [false, []]);
+    eq('REVEAL GATE: attribution refused before submit', As.attribute(brewA, 'drawdown'), brewA);
+    eq('REVEAL GATE: a brew with no assessment is not revealed', As.revealed({ phases: {} }), false);
+    const done = { ...brewA, assessment: { ...a, submittedAt: 'T' } };
+    eq('REVEAL GATE: revealed after submit', As.revealed(done), true);
+    eq('attribution: only phases this brew had, drifted ones first and flagged',
+      As.attributionOptions(done).map(o => `${o.phase}${o.drifted ? `(${o.flag})` : ''}`), ['percolation(long)', 'drawdown(short)', 'bloom']);
+    eq('attribution: one tap sets it', As.attribute(done, 'drawdown').assessment.attributedPhase, 'drawdown');
+    eq('attribution: a phase the brew never had is refused (V60 has no steep)', As.attribute(done, 'steep'), done);
+    const inWindow = { ...done, assessment: { ...done.assessment, window: 'in' } };
+    eq('attribution: nothing to attribute when IN the window', As.attributionOptions(inWindow), []);
+    eq('attribution: moving to IN clears a stale attribution', As.setField({ ...a, attributedPhase: 'drawdown' }, 'window', 'in').attributedPhase, null);
+
+    // Firewall: tally and verdict never read quality10
+    eq('FIREWALL: quality10 changes nothing in the tally', As.tally(As.setField(a, 'quality10', 1)), As.tally(As.setField(a, 'quality10', 10)));
+
+    // Cooled prompt
+    const end = Date.parse('2026-09-17T10:00:00Z');
+    eq('cooled prompt: counts down from the brew end', As.cooledPrompt(end, end + 60_000, 10), { dueAtMs: end + 600_000, remainingS: 540, due: false });
+    eq('cooled prompt: due at the minute mark', As.cooledPrompt(end, end + 600_000, 10).due, true);
+    eq('cooled prompt: bad minutes fall back to the default', As.cooledPrompt(end, end, 0).dueAtMs, end + As.DEFAULT_COOLED_AFTER_MIN * 60_000);
+    eq('brew end: start + the cut tap', As.brewEndMs({ startedAt: '2026-09-17T10:00:00Z', timeline: [{ type: 'pour', atS: 0 }, { type: 'cut', atS: 150 }] }), end + 150_000);
+    eq('brew end: unknown without an end tap', As.brewEndMs({ startedAt: '2026-09-17T10:00:00Z', timeline: [] }), null);
   }
 
   // ---- model ----

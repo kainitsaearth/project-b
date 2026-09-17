@@ -3,10 +3,11 @@
 // renders them and calls actions. Inputs are built once and refreshed in place, so typing
 // never rebuilds the form (the phone keyboard stays up).
 
-import { h, row, fmt, toNum } from './dom.js?v=16';
-import * as model from './model.js?v=16';
-import * as B from './brew.js?v=16';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=16';
+import { h, row, fmt, toNum } from './dom.js?v=17';
+import * as model from './model.js?v=17';
+import * as B from './brew.js?v=17';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=17';
+import * as A from './assessment.js?v=17';
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '—';
@@ -169,8 +170,21 @@ export function setupScreen(initialState, recipeId, actions) {
 
 // ---------- after the brew ----------
 
-// Deliberately shows NO phases or drift, and no comparison with earlier brews:
-// spec §6.3 "evidence follows judgement". They are saved; the assessment (Step 9) reveals them.
+// Before the assessment is submitted this screen shows NO phases, NO drift and NO per-step
+// timing, and never anything from earlier brews: spec §6.3.1 "evidence follows judgement".
+// After submit (A.revealed) it shows the scores, phases, drift and phase attribution.
+export function resultKey(state, brewId) {
+  let revealed = false;
+  for (const s of Object.values(state.sessions)) {
+    const b = (s.brews ?? []).find(x => x.id === brewId);
+    if (b) { revealed = A.revealed(b); break; }
+  }
+  return `result/${brewId}|${revealed ? 'revealed' : 'hidden'}`;
+}
+
+const PHASE_LABELS = { bloom: 'Bloom', steep: 'Steep', percolation: 'Percolation', lock: 'Lock', drawdown: 'Drawdown' };
+const ANSWER_MARK = { yes: 'YES', no: 'no', unsure: 'unsure' };
+
 export function resultScreen(initialState, brewId, actions) {
   let state = initialState;
   const find = () => {
@@ -198,6 +212,63 @@ export function resultScreen(initialState, brewId, actions) {
     h('label', { class: 'field-label', htmlFor: id }, label),
     num(id, brew[key], v => edit(b => B.setMeasured(b, key, v))));
 
+  const isRevealed = A.revealed(brew);
+  const started = Boolean(brew.assessment) && A.tally(brew.assessment).answered > 0;
+  const attributionButtons = new Map();
+
+  // ---- after submit: scores, then the evidence ----
+  function revealSection() {
+    const a = brew.assessment;
+    const t = A.tally(a);
+    const v = A.verdict(t.atRisk);
+    const options = A.attributionOptions(brew);
+    const cell = x => h('td', { class: `ans ans-${x ?? 'none'}` }, x ? ANSWER_MARK[x] : '—');
+    const dt = x => (x == null ? '—' : clock(x));
+    const drift = brew.drift ?? { phases: {}, total: null };
+    const flagCell = d => h('td', { class: `flag flag-${d?.flag ?? d?.exempt ?? 'none'}` },
+      d?.flag ?? (d?.exempt === 'cut' ? 'cut' : d?.exempt === 'live' ? 'live' : '—'));
+    const driftRow = (name, d) => h('tr', { 'data-phase': name },
+      h('th', {}, PHASE_LABELS[name] ?? name), h('td', {}, dt(d?.planS)), h('td', {}, dt(d?.actualS)),
+      h('td', {}, d?.deltaS == null ? '—' : `${signed(d.deltaS)} s`), flagCell(d));
+
+    return h('section', { class: 'reveal', id: 'reveal' },
+      h('h3', { class: 'section-title' }, 'Your assessment'),
+      h('div', { class: `assess-tally level-${v.level}`, id: 'reveal-tally' }, `At risk: ${t.atRisk} / 3 · ${v.text}`),
+      h('table', { class: 'answers', id: 'reveal-answers' },
+        h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Hot'), h('th', {}, 'Cooled'))),
+        h('tbody', {}, A.CATEGORIES.map(c => h('tr', { class: t.categories[c.key] ? 'at-risk' : '' },
+          h('th', {}, c.label), cell(a.hot?.[c.key]), a.cooledSkipped ? h('td', { class: 'ans' }, 'not tasted') : cell(a.cooled?.[c.key]))))),
+      h('div', { class: 'derived' },
+        row('Window', h('span', { id: 'reveal-window' }, (a.window ?? '—').toUpperCase())),
+        row('One flaw', a.oneFlaw || '—'),
+        a.descriptors ? row('Descriptors', a.descriptors) : null,
+        a.cooledAtTempC != null ? row('Cooled at', `${a.cooledAtTempC} °C`) : null,
+        row('Quality (tracking only)', a.quality10 != null ? `${a.quality10} / 10` : '—')),
+      h('a', { class: 'btn btn-small', id: 'assess-edit', href: `#/assess/${encodeURIComponent(brewId)}` }, 'Change scores'),
+
+      options.length ? h('div', { class: 'attribution', id: 'attribution' },
+        h('strong', {}, `It went ${a.window.toUpperCase()}. Which phase do you blame?`),
+        h('p', { class: 'field-hint' }, 'Phases that drifted from the plan are listed first.'),
+        h('div', { class: 'attribution-options' },
+          options.map(o => {
+            const btn = h('button', { type: 'button', class: 'btn attribution-btn', 'data-phase': o.phase,
+              onclick: () => edit(b => A.attribute(b, (b.assessment?.attributedPhase ?? null) === o.phase ? null : o.phase)) },
+              PHASE_LABELS[o.phase], o.drifted ? h('span', { class: 'drift-badge' }, ` ${o.flag}`) : null);
+            attributionButtons.set(o.phase, btn);
+            return btn;
+          }))) : null,
+
+      h('h3', { class: 'section-title' }, 'Phases & drift'),
+      h('table', { class: 'drift', id: 'drift-table' },
+        h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Plan'), h('th', {}, 'Actual'), h('th', {}, 'Δ'), h('th', {}, ''))),
+        h('tbody', {},
+          ['bloom', 'steep', 'percolation', 'lock', 'drawdown'].filter(p => p in (drift.phases ?? {})).map(p => driftRow(p, drift.phases[p])),
+          drift.total ? h('tr', { class: 'total', 'data-phase': 'total' },
+            h('th', {}, 'Total'), h('td', {}, dt(drift.total.planS)), h('td', {}, dt(drift.total.actualS)),
+            h('td', {}, drift.total.deltaS == null ? '—' : `${signed(drift.total.deltaS)} s`), flagCell(drift.total)) : null)),
+      h('p', { class: 'field-hint' }, 'Tolerance ±5 s per phase, ±10 s drawdown and total. A cut is never a short drawdown; a live lock is never judged.'));
+  }
+
   const pours = brew.timeline.filter(e => e.type === 'pour');
   const pourRows = pours.map((e, i) => h('div', { class: 'reconcile-pour', 'data-pour': i },
     h('span', { class: 'reconcile-time' }, clock(e.atS)),
@@ -209,6 +280,7 @@ export function resultScreen(initialState, brewId, actions) {
 
   const waterInEl = h('span', { class: 'derived-value', id: 'r-water-in' });
   const retentionEl = h('span', { class: 'derived-value', id: 'r-retention' });
+  const retentionPctEl = h('span', { class: 'derived-value', id: 'r-retention-pct' });
   const ratioEl = h('span', { class: 'derived-value', id: 'r-ratio' });
   const issuesEl = h('div', { id: 'reconcile-status' });
   const drow = (label, valueEl) => h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, label), valueEl);
@@ -222,9 +294,13 @@ export function resultScreen(initialState, brewId, actions) {
       row('Ended by', h('span', { id: 'brew-ended-by' }, brew.endedBy === 'cut' ? 'cut (dripper lifted)' : 'drawdown finished')),
       row('Brew time', endS != null ? clock(endS) : '—'),
       row('Taps recorded', h('span', { id: 'brew-taps' }, String(new Set(brew.timeline.map(e => e.tap)).size)))),
-    h('div', { class: 'alert alert-info', id: 'drift-hidden' },
-      h('strong', {}, 'Phases and drift are hidden for now'),
-      h('p', {}, 'Taste and score the cup first, so the numbers can’t steer your score. They are saved and will appear after the assessment.')),
+    ...(isRevealed ? [revealSection()] : [
+      h('div', { class: 'alert alert-info', id: 'drift-hidden' },
+        h('strong', {}, 'Phases and drift are hidden for now'),
+        h('p', {}, 'Taste and score the cup first, so the numbers can’t steer your score. They are saved and will appear after the assessment.')),
+      h('a', { class: 'btn btn-primary btn-brew', id: 'assess-start', href: `#/assess/${encodeURIComponent(brewId)}` },
+        started ? '☕ Continue scoring' : '☕ Taste & score'),
+    ]),
 
     h('h3', { class: 'section-title' }, 'What actually went in'),
     h('p', { class: 'field-hint' }, 'Prefilled from the plan. Correct any pour that differed. Times come from your taps and can’t be edited.'),
@@ -237,6 +313,7 @@ export function resultScreen(initialState, brewId, actions) {
     h('div', { class: 'derived', id: 'reconcile-derived' },
       drow('Water in (pours + bypass)', waterInEl),
       drow('Retention', retentionEl),
+      drow('Retention % (of water poured on the bed)', retentionPctEl),
       drow('True ratio (output ÷ dose)', ratioEl)),
     issuesEl,
     h('div', { class: 'field' },
@@ -247,7 +324,8 @@ export function resultScreen(initialState, brewId, actions) {
     h('ol', { class: 'coach-done' }, (brew.tapDrift ?? []).map(d => h('li', {},
       h('span', { class: 'coach-plan-time' }, clock(d.actualAtS)),
       h('span', {}, d.label),
-      h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`)))),
+      // Per-step timing is drift too: only after the assessment.
+      isRevealed ? h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`) : null))),
     recipe ? h('button', { type: 'button', class: 'btn btn-primary', id: 'brew-again', onclick: () => actions.newBrew(recipe.id, { fresh: true }) }, 'Brew again') : null);
 
   function refresh(next) {
@@ -257,6 +335,8 @@ export function resultScreen(initialState, brewId, actions) {
     const o = B.outcomes(b);
     waterInEl.textContent = o.waterInMl === B.UNKNOWN ? UNKNOWN : `${fmt(o.waterInMl)} ml`;
     retentionEl.textContent = o.retentionMl === B.UNKNOWN ? UNKNOWN : `${fmt(o.retentionMl)} ml`;
+    retentionPctEl.textContent = o.retentionPct === B.UNKNOWN ? UNKNOWN : `${o.retentionPct}%`;
+    for (const [phase, btn] of attributionButtons) btn.setAttribute('aria-pressed', String((b.assessment?.attributedPhase ?? null) === phase));
     ratioEl.textContent = o.trueRatio === B.UNKNOWN ? UNKNOWN : `1:${o.trueRatio.toFixed(1)}`;
     const issues = B.reconcileIssues(b);
     issuesEl.replaceChildren(issues.length
