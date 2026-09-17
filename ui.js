@@ -1,12 +1,14 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=17';
-import * as recipeLib from './recipe.js?v=17';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=17';
-import { h, row, fmt, toNum } from './dom.js?v=17';
-import { coachScreen } from './coachScreen.js?v=17';
-import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=17';
-import { assessScreen, assessKey } from './assessScreen.js?v=17';
+import * as model from './model.js?v=18';
+import * as recipeLib from './recipe.js?v=18';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=18';
+import { h, row, fmt, toNum } from './dom.js?v=18';
+import { coachScreen } from './coachScreen.js?v=18';
+import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=18';
+import { assessScreen, assessKey } from './assessScreen.js?v=18';
+import { dataScreen } from './dataScreen.js?v=18';
+import * as exportLib from './exportData.js?v=18';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -49,7 +51,7 @@ export function createUI(view, tabs, actions) {
     const fullScreen = ['brew', 'result', 'setup', 'assess'].includes(route.kind);
     tabs.hidden = fullScreen;
     if (route.kind !== 'brew' && coach) { coach.destroy(); coach = null; }
-    if (!['result', 'setup', 'assess'].includes(route.kind) && flow) { flow.destroy?.(); flow = null; }
+    if (!['result', 'setup', 'assess', 'data'].includes(route.kind) && flow) { flow.destroy?.(); flow = null; }
     if (route.kind === 'brew') {
       const key = `brew/${route.id}`;
       if (coach && mountedKey === key) { coach.refresh(state); return; }
@@ -82,6 +84,17 @@ export function createUI(view, tabs, actions) {
     flow?.destroy?.();
     flow = null;
     renderTabs(route.kind);
+
+    if (route.kind === 'data') {
+      if (flow && mountedKey === 'data') { flow.refresh(state); return; }
+      flow?.destroy?.();
+      mountedKey = 'data';
+      refreshDerived = null;
+      flow = dataScreen(state, actions, { schema: actions.schema });
+      view.replaceChildren(flow.el);
+      scrollTo(0, 0);
+      return;
+    }
 
     if (!route.id) {
       mountedKey = null;
@@ -119,11 +132,12 @@ export function createUI(view, tabs, actions) {
   const rerender = () => render(lastState, lastRoute);
 
   function renderTabs(active) {
-    tabs.replaceChildren(...Object.keys(LABELS).map(k => h('a', {
+    const all = [...Object.keys(LABELS).map(k => [k, LABELS[k][0]]), ['data', 'Data']];
+    tabs.replaceChildren(...all.map(([k, label]) => h('a', {
       href: `#/${k}`,
       class: k === active ? 'tab active' : 'tab',
       'aria-current': k === active ? 'page' : null,
-    }, LABELS[k][0])));
+    }, label)));
   }
 
   // ---------- list ----------
@@ -136,7 +150,13 @@ export function createUI(view, tabs, actions) {
 
     const active = kind === 'recipes' && state.activeBrew ? state.recipes[state.activeBrew.recipeId] : null;
 
+    const pendingBackup = kind === 'recipes' && exportLib.shouldNudge(Object.values(state.sessions), state.meta.lastExportAt, Date.now())
+      ? exportLib.unexportedBrews(Object.values(state.sessions), state.meta.lastExportAt) : 0;
+
     return h('section', { class: 'screen' },
+      pendingBackup ? h('a', { class: 'alert alert-warn resume-brew', id: 'backup-nudge', href: '#/data' },
+        h('strong', {}, `💾 ${pendingBackup} ${pendingBackup === 1 ? 'brew' : 'brews'} not backed up`),
+        h('span', {}, 'Tap to export')) : null,
       active ? h('a', { class: 'alert alert-danger resume-brew', id: 'resume-brew', href: `#/brew/${encodeURIComponent(active.id)}` },
         h('strong', {}, '● Brew in progress'),
         h('span', {}, `${model.displayName('recipes', active)} — tap to resume`)) : null,

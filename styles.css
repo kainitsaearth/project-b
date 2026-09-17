@@ -115,7 +115,7 @@ main { padding-bottom: calc(env(safe-area-inset-bottom) + 88px); }
   position: fixed;
   inset: auto 0 0 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -433,3 +433,6 @@ td.flag-cut, td.flag-live { color: var(--muted); }
 .attribution-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .attribution-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .drift-badge { color: var(--danger); font-weight: 800; }
+
+/* ---------- data (Step 10) ---------- */
+.tabs .tab { min-width: 0; padding-left: 4px; padding-right: 4px; font-size: .9375rem; }

@@ -3,9 +3,9 @@
 // timing, no diff, nothing from any other brew. It reads only this brew's own assessment.
 // Answers save as you tap; the cooled reminder buzzes when it's time to taste again.
 
-import { h, toNum } from './dom.js?v=17';
-import * as model from './model.js?v=17';
-import * as A from './assessment.js?v=17';
+import { h, toNum } from './dom.js?v=18';
+import * as model from './model.js?v=18';
+import * as A from './assessment.js?v=18';
 
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -107,8 +107,10 @@ export function assessScreen(initialState, brewId, actions) {
         h('select', { id: 'a-quality10', onchange: ev => set('quality10', toNum(ev.target.value)) },
           h('option', { value: '', selected: a0.quality10 == null }, '—'),
           Array.from({ length: A.QUALITY_MAX - A.QUALITY_MIN + 1 }, (_, i) => A.QUALITY_MIN + i)
-            .map(v => h('option', { value: String(v), selected: a0.quality10 === v }, `${v} / 10`))),
-        h('small', { class: 'field-hint' }, 'Tracking only. Never ranked, never used for advice.'))),
+            .map(v => h('option', { value: String(v), selected: a0.quality10 === v },
+              `${v} / 10${A.QUALITY_ANCHORS[v] ? ` · ${A.QUALITY_ANCHORS[v]}` : ''}`))),
+        h('small', { class: 'field-hint', id: 'quality-anchors' },
+          `1 = ${A.QUALITY_ANCHORS[1]} · 10 = ${A.QUALITY_ANCHORS[10]}. Tracking only. Never ranked, never used for advice.`))),
 
     issuesEl,
     submitBtn);
@@ -134,6 +136,16 @@ export function assessScreen(initialState, brewId, actions) {
       }
     } catch { /* no audio */ }
     window.__cooledAlarms = (window.__cooledAlarms ?? 0) + 1;
+    // In the background, a buzz inside the page may not reach you: post a system notification.
+    // Best effort — Android may pause a background page, so this can arrive late.
+    if (document.visibilityState === 'hidden' && window.Notification?.permission === 'granted') {
+      navigator.serviceWorker?.ready?.then(reg => reg.showNotification('☕ Taste it cooled now', {
+        body: `${recipe ? model.displayName('recipes', recipe) : 'Your brew'}: time for the cooled assessment.`,
+        tag: `cooled-${brewId}`, renotify: true, vibrate: [300, 150, 300, 150, 300], requireInteraction: true,
+        data: { hash: `#/assess/${encodeURIComponent(brewId)}` },
+      })).catch(() => {});
+      window.__cooledNotified = (window.__cooledNotified ?? 0) + 1;
+    }
   };
   const tick = () => {
     const a = find()?.assessment ?? A.createAssessment();

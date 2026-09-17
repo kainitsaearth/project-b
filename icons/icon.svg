@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#1b1a18"/>
+  <!-- dripper cone -->
+  <path d="M146 170 H366 L292 300 H220 Z" fill="#d08a52"/>
+  <rect x="126" y="150" width="260" height="26" rx="13" fill="#d08a52"/>
+  <!-- drop -->
+  <path d="M256 322 C256 322 222 364 222 386 A34 34 0 0 0 290 386 C290 364 256 322 256 322 Z" fill="#f6f4f0"/>
+</svg>

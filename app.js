@@ -3,15 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=17';
-import * as model from './model.js?v=17';
-import * as recipeLib from './recipe.js?v=17';
-import * as coachLib from './coach.js?v=17';
-import * as timelineLib from './timeline.js?v=17';
-import * as brewLib from './brew.js?v=17';
-import * as assessLib from './assessment.js?v=17';
-import { daysOffRoast } from './compute.js?v=17';
-import { createUI } from './ui.js?v=17';
+import * as store from './store.js?v=18';
+import * as model from './model.js?v=18';
+import * as recipeLib from './recipe.js?v=18';
+import * as coachLib from './coach.js?v=18';
+import * as timelineLib from './timeline.js?v=18';
+import * as brewLib from './brew.js?v=18';
+import * as assessLib from './assessment.js?v=18';
+import { daysOffRoast } from './compute.js?v=18';
+import { createUI } from './ui.js?v=18';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -159,7 +159,7 @@ function seed() {
 
 // ---------- routing ----------
 
-const ROUTE = /^#\/(recipes|beans|rigs|waters|setup|brew|result|assess)(?:\/([^/]+))?$/;
+const ROUTE = /^#\/(recipes|beans|rigs|waters|data|setup|brew|result|assess)(?:\/([^/]+))?$/;
 
 function currentRoute() {
   const m = ROUTE.exec(location.hash);
@@ -328,6 +328,13 @@ export const actions = {
     return false;
   },
 
+  // ---- data (Step 10) ----
+  markExported(iso) {
+    mutate(s => { s.meta.lastExportAt = iso; });
+    flush();
+  },
+  schema: SCHEMA,
+
   // ---- assessment (Step 9) ----
   // Saved as you tap. A brew's assessment starts EMPTY — never copied from another brew.
   setAssessment(brewId, path, value) {
@@ -486,8 +493,13 @@ async function boot() {
   store.requestPersistence().catch(() => {});
 
   const params = new URLSearchParams(location.search);
+  // Offline + installable. On http://localhost only with ?sw, so local edits aren't hidden behind a cache.
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || params.has('sw'))) {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.warn('[sw] registration failed:', err));
+  }
+
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=17').then(m => m.runTests());
+    import('./tests.js?v=18').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
   }
 }
 

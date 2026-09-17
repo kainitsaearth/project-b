@@ -21,6 +21,11 @@ export const WINDOWS = Object.freeze(['under', 'in', 'over']);
 export const TEMPS = Object.freeze(['hot', 'cooled']);
 export const QUALITY_MIN = 1;
 export const QUALITY_MAX = 10;
+// Anchors for the ends of the scale, so a 1 and a 10 mean the same thing every session.
+export const QUALITY_ANCHORS = Object.freeze({
+  1: 'undrinkable, would pour it out',
+  10: 'exceptional, the best cup I can make',
+});
 export const DEFAULT_COOLED_AFTER_MIN = 10;
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);

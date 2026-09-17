@@ -1,13 +1,14 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=17';
-import * as model from './model.js?v=17';
-import * as R from './recipe.js?v=17';
-import * as T from './timeline.js?v=17';
-import * as C from './coach.js?v=17';
-import * as Bw from './brew.js?v=17';
-import * as As from './assessment.js?v=17';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=18';
+import * as model from './model.js?v=18';
+import * as R from './recipe.js?v=18';
+import * as T from './timeline.js?v=18';
+import * as C from './coach.js?v=18';
+import * as Bw from './brew.js?v=18';
+import * as As from './assessment.js?v=18';
+import * as Xp from './exportData.js?v=18';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -1024,6 +1025,47 @@ export function runTests(log = console) {
     eq('cooled prompt: bad minutes fall back to the default', As.cooledPrompt(end, end, 0).dueAtMs, end + As.DEFAULT_COOLED_AFTER_MIN * 60_000);
     eq('brew end: start + the cut tap', As.brewEndMs({ startedAt: '2026-09-17T10:00:00Z', timeline: [{ type: 'pour', atS: 0 }, { type: 'cut', atS: 150 }] }), end + 150_000);
     eq('brew end: unknown without an end tap', As.brewEndMs({ startedAt: '2026-09-17T10:00:00Z', timeline: [] }), null);
+  }
+
+  // ================= export (exportData.js) =================
+  {
+    const st = {
+      meta: { seeded: true, lastExportAt: null },
+      beans: { 'bean-b': { id: 'bean-b', name: 'B' }, 'bean-a': { id: 'bean-a', name: 'A' } },
+      rigs: { r1: { id: 'r1' } }, waters: {}, recipes: { x: { id: 'x', plan: [] } },
+      sessions: {
+        'session-2026-09-16': { id: 'session-2026-09-16', brews: [{ id: 'b1', startedAt: '2026-09-16T08:00:00Z', assessment: { submittedAt: 'T', quality10: 3 } }] },
+        'session-2026-09-17': { id: 'session-2026-09-17', brews: [{ id: 'b2', startedAt: '2026-09-17T08:00:00Z', assessment: { submittedAt: null, hot: { flavor: 'no' } } }, { id: 'b3', startedAt: '2026-09-17T09:00:00Z' }] },
+      },
+      activeBrew: { id: 'running', timeline: [{ type: 'pour', atS: 0 }] }, brewDraft: null,
+    };
+    const ex = Xp.buildExport(st, { exportedAt: '2026-09-17T10:00:00Z', appVersion: 18, schema: 2 });
+    eq('export: format, version, when, app version', [ex.format, ex.version, ex.exportedAt, ex.appVersion, ex.schema], ['project-b-export', 1, '2026-09-17T10:00:00Z', 18, 2]);
+    eq('export: counts', ex.counts, { beans: 2, rigs: 1, waters: 0, recipes: 1, sessions: 2, brews: 3, assessedBrews: 1 });
+    eq('export: entities as arrays, sorted by id (stable files)', ex.data.beans.map(b => b.id), ['bean-a', 'bean-b']);
+    eq('export: nothing filtered — quality10 included (a backup, not advice)', ex.data.sessions[0].brews[0].assessment.quality10, 3);
+    eq('export: a brew in progress is included, not lost', ex.data.activeBrew.id, 'running');
+    const round = JSON.parse(JSON.stringify(ex));
+    eq('export: survives JSON round trip and validates', Xp.validateExport(round), []);
+    eq('validate: catches a wrong file', Xp.validateExport({ format: 'other' }).length > 0, true);
+    eq('validate: catches a count that does not match', Xp.validateExport({ ...round, counts: { ...round.counts, brews: 9 } }), ['counts.brews says 9, file has 3']);
+    eq('validate: catches a record without an id', Xp.validateExport({ ...round, data: { ...round.data, beans: [{ name: 'x' }] } }), ['data.beans has a record without an id']);
+    eq('export: pure — the state is untouched', Object.keys(st.beans), ['bean-b', 'bean-a']);
+
+    eq('filename: local date and time', Xp.exportFilename(new Date(2026, 8, 7, 9, 5)), 'project-b-2026-09-07-0905.json');
+    eq('filename: bad date → safe fallback', Xp.exportFilename(new Date('x')), 'project-b-export.json');
+
+    const sessions = Object.values(st.sessions);
+    eq('backup: never exported → every brew pending', Xp.unexportedBrews(sessions, null), 3);
+    eq('backup: only brews after the last export are pending', Xp.unexportedBrews(sessions, '2026-09-17T08:30:00Z'), 1);
+    eq('backup: all exported → 0', Xp.unexportedBrews(sessions, '2026-09-18T00:00:00Z'), 0);
+    const now = Date.parse('2026-09-17T12:00:00Z');
+    eq('nudge: brews never exported → nudge', Xp.shouldNudge(sessions, null, now), true);
+    eq('nudge: exported this morning → no nudge yet, even with a newer brew', Xp.shouldNudge(sessions, '2026-09-17T08:30:00Z', now), false);
+    eq('nudge: last export 3+ days ago and new brews → nudge', Xp.shouldNudge(sessions, '2026-09-14T08:00:00Z', now), true);
+    eq('nudge: nothing to back up → never', Xp.shouldNudge([], null, now), false);
+
+    eq('quality anchors: words for 1 and 10', [As.QUALITY_ANCHORS[1], As.QUALITY_ANCHORS[10]], ['undrinkable, would pour it out', 'exceptional, the best cup I can make']);
   }
 
   // ---- model ----
