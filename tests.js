@@ -1,14 +1,14 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=18';
-import * as model from './model.js?v=18';
-import * as R from './recipe.js?v=18';
-import * as T from './timeline.js?v=18';
-import * as C from './coach.js?v=18';
-import * as Bw from './brew.js?v=18';
-import * as As from './assessment.js?v=18';
-import * as Xp from './exportData.js?v=18';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=19';
+import * as model from './model.js?v=19';
+import * as R from './recipe.js?v=19';
+import * as T from './timeline.js?v=19';
+import * as C from './coach.js?v=19';
+import * as Bw from './brew.js?v=19';
+import * as As from './assessment.js?v=19';
+import * as Xp from './exportData.js?v=19';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -1054,6 +1054,7 @@ export function runTests(log = console) {
 
     eq('filename: local date and time', Xp.exportFilename(new Date(2026, 8, 7, 9, 5)), 'project-b-2026-09-07-0905.json');
     eq('filename: bad date → safe fallback', Xp.exportFilename(new Date('x')), 'project-b-export.json');
+    eq('share: plain text with .json.txt (Android refuses to share .json)', [Xp.SHARE_TYPE, Xp.shareFilename(new Date(2026, 8, 7, 9, 5))], ['text/plain', 'project-b-2026-09-07-0905.json.txt']);
 
     const sessions = Object.values(st.sessions);
     eq('backup: never exported → every brew pending', Xp.unexportedBrews(sessions, null), 3);

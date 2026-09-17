@@ -1,14 +1,14 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=18';
-import * as recipeLib from './recipe.js?v=18';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=18';
-import { h, row, fmt, toNum } from './dom.js?v=18';
-import { coachScreen } from './coachScreen.js?v=18';
-import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=18';
-import { assessScreen, assessKey } from './assessScreen.js?v=18';
-import { dataScreen } from './dataScreen.js?v=18';
-import * as exportLib from './exportData.js?v=18';
+import * as model from './model.js?v=19';
+import * as recipeLib from './recipe.js?v=19';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=19';
+import { h, row, fmt, toNum } from './dom.js?v=19';
+import { coachScreen } from './coachScreen.js?v=19';
+import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=19';
+import { assessScreen, assessKey } from './assessScreen.js?v=19';
+import { dataScreen } from './dataScreen.js?v=19';
+import * as exportLib from './exportData.js?v=19';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -81,8 +81,8 @@ export function createUI(view, tabs, actions) {
       if (!sameScreen) scrollTo(0, 0);
       return;
     }
-    flow?.destroy?.();
-    flow = null;
+    // Leaving the flow screens (and not going to Data, which keeps its own screen object).
+    if (route.kind !== 'data') { flow?.destroy?.(); flow = null; }
     renderTabs(route.kind);
 
     if (route.kind === 'data') {

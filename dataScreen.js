@@ -1,8 +1,8 @@
 // dataScreen.js — Step 10: back up your data (JSON export), install, offline status,
 // notification permission for the cooled reminder.
 
-import { h, row } from './dom.js?v=18';
-import * as X from './exportData.js?v=18';
+import { h, row } from './dom.js?v=19';
+import * as X from './exportData.js?v=19';
 
 // The version this build was loaded as — the ?v= on this module's own URL, bumped by the deploy loop.
 export const APP_VERSION = Number(new URL(import.meta.url).searchParams.get('v')) || null;
@@ -52,18 +52,26 @@ export function dataScreen(initialState, actions, { schema }) {
   };
 
   const share = async () => {
-    const { now, obj, name, json } = payload();
-    const file = new File([json], name, { type: 'application/json' });
+    const { now, obj, json } = payload();
+    const name = X.shareFilename(now);
+    const file = new File([json], name, { type: X.SHARE_TYPE });
+    const useDownload = 'Use ⬇ Download JSON instead, then send the file from your Files app or Drive.';
+    if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+      statusEl.textContent = `This phone can't share the backup file. ${useDownload}`;
+      return;
+    }
     try {
-      await navigator.share({ files: [file], title: name, text: `Project B backup: ${obj.counts.brews} brews` });
+      await navigator.share({ files: [file], title: name });
       actions.markExported(now.toISOString());
-      statusEl.textContent = `Shared ${name}.`;
+      statusEl.textContent = `Shared ${name}: ${obj.counts.brews} brews. It's JSON inside; rename to .json on the laptop if you like.`;
     } catch (err) {
-      statusEl.textContent = err?.name === 'AbortError' ? 'Share cancelled. Nothing was marked as backed up.' : `Share failed: ${err?.message ?? err}`;
+      statusEl.textContent = err?.name === 'AbortError'
+        ? 'Share cancelled. Nothing was marked as backed up.'
+        : `Android wouldn't share the file (${err?.name ?? 'error'}: ${err?.message ?? err}). ${useDownload}`;
     }
   };
   const canShareFiles = (() => {
-    try { return Boolean(navigator.canShare?.({ files: [new File(['{}'], 'x.json', { type: 'application/json' })] })); } catch { return false; }
+    try { return Boolean(navigator.canShare?.({ files: [new File(['{}'], 'x.json.txt', { type: X.SHARE_TYPE })] })); } catch { return false; }
   })();
 
   el.append(

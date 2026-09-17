@@ -3,11 +3,11 @@
 // renders them and calls actions. Inputs are built once and refreshed in place, so typing
 // never rebuilds the form (the phone keyboard stays up).
 
-import { h, row, fmt, toNum } from './dom.js?v=18';
-import * as model from './model.js?v=18';
-import * as B from './brew.js?v=18';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=18';
-import * as A from './assessment.js?v=18';
+import { h, row, fmt, toNum } from './dom.js?v=19';
+import * as model from './model.js?v=19';
+import * as B from './brew.js?v=19';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=19';
+import * as A from './assessment.js?v=19';
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '—';

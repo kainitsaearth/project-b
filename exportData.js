@@ -46,6 +46,14 @@ export function exportFilename(date) {
   return `project-b-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
 }
 
+// Sharing: Chrome on Android refuses to share .json files ("Permission denied" — the type isn't on
+// its allowed list). A plain-text file with the same JSON inside is accepted everywhere, and it
+// opens fine on a laptop. The name keeps ".json" so it's obvious what it is.
+export const SHARE_TYPE = 'text/plain';
+export function shareFilename(date) {
+  return exportFilename(date).replace(/\.json$/, '.json.txt');
+}
+
 // Is this a Project B export that could be read back? → [problem]   ([] = valid)
 export function validateExport(obj) {
   const issues = [];
