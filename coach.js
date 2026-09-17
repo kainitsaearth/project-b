@@ -39,9 +39,10 @@ export function plannedActions(recipe, rig) {
       if (startsSteep && !valve) skipped.push({ seq, reason: 'valve closure ignored: rig has no valve' });
       list.push({
         type: 'pour', seq, atS: a.atS,
-        label: closes ? 'CLOSE VALVE + POUR' : 'POUR',
+        label: `${closes ? 'CLOSE VALVE + POUR' : 'POUR'}${a.dripAssist ? ' · DRIP ASSIST' : ''}`,
         volumeMl: a.volumeMl ?? null, cumulativeMl: a.cumulativeMl ?? null,
         tempC: a.tempC ?? null, style: a.style || null, flowRate: a.flowRate ?? null,
+        dripAssist: Boolean(a.dripAssist),
         valve: valve ? (closes || a.valveState === 'closed' ? 'closed' : 'open') : null,
         closesValve: closes,
       });
@@ -207,7 +208,7 @@ function eventsForAction(a, atS, tap, fire) {
   switch (a.type) {
     case 'pour':
       return { ...base, type: 'pour', volumeMl: a.volumeMl, tempC: a.tempC, style: a.style, flowRate: a.flowRate,
-        valve: a.closesValve ? 'closed' : 'open' };
+        dripAssist: Boolean(a.dripAssist), valve: a.closesValve ? 'closed' : 'open' };
     case 'open-valve': return { ...base, type: 'valve', state: 'open', trigger: 'planned' };
     case 'swirl': return { ...base, type: 'swirl', count: a.count };
     case 'cut': return { ...base, type: 'cut' };
@@ -215,13 +216,62 @@ function eventsForAction(a, atS, tap, fire) {
   }
 }
 
+// ---------- pour count-in ----------
+//
+// Pressing a POUR step doesn't stamp the pour at the press: it counts 3 → 2 → 1 first, so
+// there's time to put the phone down and lift the kettle. The pour is stamped at
+// press + countInS, straight away, with `pressedAtS` on it — so a killed app resumes
+// mid-count, and UNDO cancels it. While a count-in runs every other press is ignored.
+// Tip: press when the planned countdown starts and both counts land on the plan.
+
+export const POUR_COUNT_IN_S = 3;
+
+// The count-in running at brew time tS, or null.
+// → { atS: when the pour is stamped, pressedAtS, remainingS, countdown: 3|2|1, tap }
+export function pendingCountIn(timeline, tS) {
+  let found = null;
+  for (const e of timeline ?? []) {
+    if (isNum(e?.pressedAtS) && isNum(e.atS) && e.atS > tS + EPS && e.pressedAtS <= tS + EPS) found = e;
+  }
+  if (!found) return null;
+  const remainingS = found.atS - tS;
+  return { atS: found.atS, pressedAtS: found.pressedAtS, remainingS, countdown: Math.max(1, Math.ceil(remainingS - EPS)), tap: found.tap };
+}
+
+// Buzzes of count-ins in (fromS, toS]: a tick on each whole second left, a fire when the pour is stamped.
+// (The press itself already buzzed, so no tick at the press.)
+export function countInBuzzes(timeline, fromS, toS) {
+  const out = [];
+  const seen = new Set();
+  for (const e of timeline ?? []) {
+    if (!isNum(e?.pressedAtS) || !isNum(e.atS) || seen.has(e.tap)) continue;
+    seen.add(e.tap);
+    for (let n = Math.floor(e.atS - e.pressedAtS - EPS); n >= 1; n--) {
+      const at = e.atS - n;
+      if (at > fromS + EPS && at <= toS + EPS) out.push({ atS: at, type: 'tick', n, label: 'COUNT-IN' });
+    }
+    if (e.atS > fromS + EPS && e.atS <= toS + EPS) out.push({ atS: e.atS, type: 'fire', label: 'POUR NOW' });
+  }
+  return out;
+}
+
+// Is moment tS inside a count-in (after its press, up to and including its pour)?
+export function inCountIn(timeline, tS) {
+  for (const e of timeline ?? []) {
+    if (isNum(e?.pressedAtS) && isNum(e.atS) && tS > e.pressedAtS + EPS && tS <= e.atS + EPS) return true;
+  }
+  return false;
+}
+
 // A press, at brew time tS. Returns a NEW timeline; the input is never changed.
 //   which: 'main' (the TAP button) | 'cut' | 'drawdown' | 'valve' (live close/open → lock)
-// After the brew has ended every press is ignored.
-export function applyTap(sched, timeline, tS, which = 'main') {
+//   countInS: seconds between pressing a pour step and stamping it (0 = stamp at the press)
+// After the brew has ended, or while a count-in runs, every press is ignored.
+export function applyTap(sched, timeline, tS, which = 'main', { countInS = 0 } = {}) {
   const tl = [...(timeline ?? [])];
   const st = tapState(sched, tl);
   if (st.ended || !isNum(tS)) return tl;
+  if (tl.some(e => isNum(e?.atS) && e.atS > tS + EPS)) return tl;   // a count-in is running
   const tap = st.taps + 1;
   const atS = round2(tS);
 
@@ -232,7 +282,14 @@ export function applyTap(sched, timeline, tS, which = 'main') {
     const exp = expectedTap(sched, tl, tS);
     if (exp.kind === 'pour-done') tl.push({ type: 'pour-done', atS, tap });
     else if (exp.kind === 'drawdown-complete') tl.push({ type: 'drawdown-complete', atS, tap });
-    else if (exp.kind === 'action') for (const a of exp.fire.actions) tl.push(eventsForAction(a, atS, tap, exp.fireIndex));
+    else if (exp.kind === 'action') {
+      const countIn = isNum(countInS) && countInS > 0 && exp.fire.actions.some(a => a.type === 'pour');
+      for (const a of exp.fire.actions) {
+        tl.push(countIn
+          ? { ...eventsForAction(a, round2(tS + countInS), tap, exp.fireIndex), pressedAtS: atS }
+          : eventsForAction(a, atS, tap, exp.fireIndex));
+      }
+    }
   }
   return tl;
 }

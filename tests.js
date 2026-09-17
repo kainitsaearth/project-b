@@ -1,11 +1,11 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=11';
-import * as model from './model.js?v=11';
-import * as R from './recipe.js?v=11';
-import * as T from './timeline.js?v=11';
-import * as C from './coach.js?v=11';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=12';
+import * as model from './model.js?v=12';
+import * as R from './recipe.js?v=12';
+import * as T from './timeline.js?v=12';
+import * as C from './coach.js?v=12';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -816,6 +816,47 @@ export function runTests(log = console) {
     C.undoTap(input);
     eq('pure: applyTap and undoTap never change the timeline passed in', JSON.stringify(input), copy);
     eq('tap: nothing happens without a valid time', C.applyTap(vs, [], NaN), []);
+  }
+
+  // ================= pour count-in + drip assist (coach.js) =================
+  {
+    const sched = C.schedule(yuanRecipe(), { rig: switchRig() });
+    const ci = { countInS: C.POUR_COUNT_IN_S };
+    let tl = C.applyTap(sched, [], -3, 'main', ci);
+    eq('count-in: pressing a pour stamps it 3 s later, remembering the press', [tl.length, tl[0].type, tl[0].atS, tl[0].pressedAtS, tl[0].plannedAtS], [1, 'pour', 0, -3, 0]);
+    eq('count-in: counts 3 → 2 → 1', [-2.9, -1.5, -0.2].map(t => C.pendingCountIn(tl, t)?.countdown), [3, 2, 1]);
+    eq('count-in: over at the pour', C.pendingCountIn(tl, 0), null);
+    eq('count-in: other presses are ignored while it runs (main, cut, valve, drawdown)',
+      ['main', 'cut', 'valve', 'drawdown'].map(w => C.applyTap(sched, tl, -1, w, ci).length), [1, 1, 1, 1]);
+    eq('count-in: UNDO cancels it', C.pendingCountIn(C.undoTap(tl), -1), null);
+    eq('count-in: buzzes tick at −2, −1 and fire at 0, none at the press',
+      C.countInBuzzes(tl, -3, 1).map(b => `${b.type}@${b.atS}`), ['tick@-2', 'tick@-1', 'fire@0']);
+    eq('count-in: the plan\'s own buzzes inside the count are suppressed', C.buzzesBetween(sched, -3, 0).filter(b => !C.inCountIn(tl, b.atS)).map(b => b.atS), []);
+    eq('count-in: after the pour, POUR DONE is offered as before', C.expectedTap(sched, tl, 5).label, 'POUR DONE');
+    tl = C.applyTap(sched, tl, 20, 'main', ci);   // POUR DONE: not a pour step → no count-in
+    eq('count-in: POUR DONE is stamped at the press', [tl[1].type, tl[1].atS, 'pressedAtS' in tl[1]], ['pour-done', 20, false]);
+    tl = C.applyTap(sched, tl, 40, 'main', ci);   // OPEN VALVE → no count-in
+    eq('count-in: OPEN VALVE is stamped at the press', [tl[2].type, tl[2].atS], ['valve', 40]);
+    tl = C.applyTap(sched, tl, 42, 'main', ci);   // POUR pressed when its countdown starts
+    eq('count-in: pressing when the planned countdown starts lands on the plan', C.tapDrift(sched, tl).map(d => d.deltaS), [0, 0, 0]);
+    eq('count-in: off (0) stamps at the press, as before', C.applyTap(sched, [], -1, 'main', { countInS: 0 })[0].atS, -1);
+    eq('count-in: a press during a count-in that was undone works again', C.applyTap(sched, C.undoTap(tl), 43, 'main', ci).slice(-1)[0].atS, 46);
+    const T2 = T.analyzeBrew(yuanRecipe(), [...C.applyTap(sched, [], -3, 'main', ci), { type: 'valve', state: 'open', trigger: 'planned', atS: 40, tap: 2 }, { type: 'cut', atS: 150, tap: 3 }]);
+    eq('count-in: the analysis measures from the stamped pour, not the press', T2.phases.steep, 40);
+
+    // Drip assist
+    const da = R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [
+      { id: 'a', action: 'pour', atS: 0, volumeMl: 60, valve: 'open' },
+      { id: 'b', action: 'pour', atS: 100, volumeMl: 190, valve: 'open', dripAssist: true },
+    ] }));
+    const ds = C.schedule(da, { rig: v60Rig() });
+    eq('drip assist: new pours default off', model.createAction('pour').dripAssist, false);
+    eq('drip assist: never inherited from the previous pour', model.createAction('pour', [{ action: 'pour', atS: 0, dripAssist: true }]).dripAssist, false);
+    eq('drip assist: the cue says so', C.plannedActions(da, v60Rig()).actions.map(a => a.label), ['POUR', 'POUR · DRIP ASSIST']);
+    const dt = C.applyTap(ds, C.applyTap(ds, [], 0), 100);
+    eq('drip assist: stamped on the tapped pour', dt.filter(e => e.type === 'pour').map(e => e.dripAssist), [false, true]);
+    eq('drip assist: does not block the plan', R.validateRecipe(da, v60Rig()).length, 0);
+    eq('drip assist: survives adapting the plan to another rig', R.adaptPlanToRig(da.plan, v60Rig())[1].dripAssist, true);
   }
 
   // ---- model ----

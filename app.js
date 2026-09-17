@@ -3,12 +3,12 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=11';
-import * as model from './model.js?v=11';
-import * as recipeLib from './recipe.js?v=11';
-import * as coachLib from './coach.js?v=11';
-import * as timelineLib from './timeline.js?v=11';
-import { createUI } from './ui.js?v=11';
+import * as store from './store.js?v=12';
+import * as model from './model.js?v=12';
+import * as recipeLib from './recipe.js?v=12';
+import * as coachLib from './coach.js?v=12';
+import * as timelineLib from './timeline.js?v=12';
+import { createUI } from './ui.js?v=12';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -267,11 +267,11 @@ export const actions = {
     flush();   // a started brew must survive the app being killed in the next second
     return true;
   },
-  brewTap(which, tS) {
+  brewTap(which, tS, opts = {}) {
     const brew = state.activeBrew;
     const sched = brew && scheduleFor(brew.recipeId);
     if (!sched) return;
-    const next = coachLib.applyTap(sched, brew.timeline, tS, which);
+    const next = coachLib.applyTap(sched, brew.timeline, tS, which, opts);
     if (next.length === brew.timeline.length) return;
     mutate(s => { s.activeBrew.timeline = next; });
     flush();   // taps are saved immediately, not after the 400 ms debounce
@@ -375,7 +375,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=11').then(m => m.runTests());
+    import('./tests.js?v=12').then(m => m.runTests());
   }
 }
 

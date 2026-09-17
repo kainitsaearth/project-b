@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=11';
-import * as model from './model.js?v=11';
-import * as recipeLib from './recipe.js?v=11';
-import * as C from './coach.js?v=11';
+import { h } from './dom.js?v=12';
+import * as model from './model.js?v=12';
+import * as recipeLib from './recipe.js?v=12';
+import * as C from './coach.js?v=12';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {
@@ -13,7 +13,7 @@ const SPEED = (() => {
   return Number.isFinite(v) && v > 0 ? v : 1;
 })();
 
-export const COACH_DEFAULTS = Object.freeze({ sound: true, vibration: true });
+export const COACH_DEFAULTS = Object.freeze({ sound: true, vibration: true, countIn: true });
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '';
@@ -33,6 +33,7 @@ function stepDetail(fire) {
       a.volumeMl != null ? `${a.volumeMl} ml → ${a.cumulativeMl ?? '?'} g on scale` : null,
       a.tempC != null ? `${a.tempC} °C` : null,
       a.flowRate != null ? `flow ${a.flowRate}` : null,
+      a.dripAssist ? 'drip assist' : null,
       a.style || null,
       a.valve ? `valve ${a.valve}` : null,
     ].filter(Boolean).join(' · ');
@@ -94,7 +95,8 @@ export function coachScreen(initialState, recipe, actions) {
   let lastT = null;
   let flashUntil = 0;
   let wakeLock = null;
-  let builtFor = null;   // 'idle' | 'running' — which view is in the DOM
+  let builtFor = null;
+  let wasPending = false;   // 'idle' | 'running' — which view is in the DOM
 
   const mine = () => (state.activeBrew?.recipeId === recipe.id ? state.activeBrew : null);
   const tNow = () => {
@@ -132,6 +134,7 @@ export function coachScreen(initialState, recipe, actions) {
       h('div', { class: 'coach-settings' },
         toggle('vibration', 'Vibration'),
         toggle('sound', 'Sound'),
+        toggle('countIn', `${C.POUR_COUNT_IN_S} s count-in after pressing a pour`),
         navigator.vibrate ? null : h('p', { class: 'field-hint', id: 'coach-no-vibrate' }, "This browser can't vibrate. Sound and colour still work."),
         h('button', { type: 'button', class: 'btn', id: 'coach-test', onclick: () => {
           signals.unlock();
@@ -148,7 +151,8 @@ export function coachScreen(initialState, recipe, actions) {
             actions.startBrew(recipe.id, Date.now() + (-sched.startS * 1000) / SPEED);
             keepAwake();
           } }, 'START'),
-      h('p', { class: 'field-hint' }, `The countdown starts ${sched.cueLeadS} s before the first pour. The screen stays awake while brewing.`));
+      h('p', { class: 'field-hint' }, `The countdown starts ${sched.cueLeadS} s before the first pour. The screen stays awake while brewing.`),
+      s.countIn ? h('p', { class: 'field-hint' }, `Count-in: pressing a pour counts ${C.POUR_COUNT_IN_S} → 1 and records the pour at the end. Press when the countdown starts and you'll pour right on time. CANCEL stops it.`) : null);
   }
 
   // ---- running ----
@@ -162,7 +166,7 @@ export function coachScreen(initialState, recipe, actions) {
     if (t === null) return;
     signals.unlock();
     signals.play('tap');
-    actions.brewTap(which, t);
+    actions.brewTap(which, t, { countInS: which === 'main' && settings().countIn ? C.POUR_COUNT_IN_S : 0 });
   };
   const tapBtn = h('button', { type: 'button', class: 'coach-tap', id: 'coach-tap', onclick: () => press('main') });
   const undoBtn = h('button', { type: 'button', class: 'btn', id: 'coach-undo', onclick: () => actions.undoTap() }, 'UNDO');
@@ -188,7 +192,8 @@ export function coachScreen(initialState, recipe, actions) {
   function paintDone() {
     const ab = mine();
     if (!ab) return;
-    const rows = C.tapDrift(sched, ab.timeline).reverse();
+    const t = tNow();
+    const rows = C.tapDrift(sched, ab.timeline.filter(e => t === null || e.atS <= t + 1e-6)).reverse();
     doneEl.replaceChildren(...rows.map(d => h('li', { class: Math.abs(d.deltaS) > 5 ? 'late' : '' },
       h('span', { class: 'coach-plan-time' }, clock(d.actualAtS)),
       h('span', {}, d.label),
@@ -201,9 +206,35 @@ export function coachScreen(initialState, recipe, actions) {
     const st = C.stateAt(sched, t);
     const exp = C.expectedTap(sched, ab.timeline, t);
     const ts = C.tapState(sched, ab.timeline);
+    const pending = C.pendingCountIn(ab.timeline, t);
 
     el.dataset.t = t.toFixed(2);
+    el.dataset.countIn = pending ? String(pending.countdown) : '';
     clockEl.textContent = clock(t);
+    if (!pending && wasPending) paintDone();
+    wasPending = Boolean(pending);
+
+    undoBtn.textContent = pending ? 'CANCEL' : 'UNDO';
+    undoBtn.disabled = ts.taps === 0;
+    if (pending) {
+      // Count-in: one thing on screen — the number, and what happens at zero.
+      const fire = sched.events.filter(e => e.kind === 'fire')[ab.timeline.find(e => e.tap === pending.tap)?.fire];
+      countEl.textContent = String(pending.countdown);
+      el.classList.add('cueing');
+      el.classList.toggle('fired', performance.now() < flashUntil);
+      tapBtn.textContent = `POUR IN ${pending.countdown}`;
+      tapBtn.dataset.kind = 'count-in';
+      tapBtn.disabled = true;
+      nowEl.textContent = fire ? fire.label : 'POUR';
+      detailEl.textContent = fire ? stepDetail(fire) : '';
+      nextEl.textContent = 'Tap CANCEL to stop';
+      if (valveBtn) valveBtn.hidden = true;
+      drawdownBtn.hidden = true;
+      if (cutBtn) cutBtn.hidden = true;
+      return;
+    }
+    if (cutBtn) cutBtn.hidden = false;
+
     countEl.textContent = st.countdown ?? '';
     el.classList.toggle('cueing', st.countdown !== null);
     el.classList.toggle('fired', performance.now() < flashUntil);
@@ -222,8 +253,6 @@ export function coachScreen(initialState, recipe, actions) {
     const after = st.next ? fires[fires.indexOf(st.next) + 1] : null;
     const upcoming = st.countdown !== null ? after : st.next;
     nextEl.textContent = upcoming ? `then ${recipeLib.formatClock(upcoming.atS)} · ${upcoming.label}` : '';
-
-    undoBtn.disabled = ts.taps === 0;
     if (valveBtn) {
       // During a PLANNED steep the only valve action is the planned OPEN VALVE on the big button.
       // A second "open" here would log the opening as a live lock and misclassify the steep.
@@ -238,7 +267,12 @@ export function coachScreen(initialState, recipe, actions) {
     const t = tNow();
     if (t === null) return;
     if (lastT === null) lastT = t;
-    const buzzes = C.buzzesBetween(sched, lastT, t);
+    const tl = mine()?.timeline ?? [];
+    // During a count-in its own ticks replace the plan's, so nothing buzzes twice.
+    const buzzes = [
+      ...C.buzzesBetween(sched, lastT, t).filter(b => !C.inCountIn(tl, b.atS)),
+      ...C.countInBuzzes(tl, lastT, t),
+    ].sort((a, b) => a.atS - b.atS);
     // Screen was asleep or the tab hidden: signal only the latest moment, not a burst.
     const toPlay = t - lastT > 1.5 ? buzzes.slice(-1) : buzzes;
     for (const b of toPlay) {

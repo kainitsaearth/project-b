@@ -347,3 +347,6 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
 .coach-delta { font-variant-numeric: tabular-nums; }
 
 [hidden] { display: none !important; }
+
+.toggle-mini { align-items: center; gap: 8px; padding: 0; min-height: 0; align-self: end; }
+.toggle-mini input { margin: 0; }
