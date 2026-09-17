@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=12';
-import * as model from './model.js?v=12';
-import * as recipeLib from './recipe.js?v=12';
-import * as C from './coach.js?v=12';
+import { h } from './dom.js?v=13';
+import * as model from './model.js?v=13';
+import * as recipeLib from './recipe.js?v=13';
+import * as C from './coach.js?v=13';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {
@@ -33,7 +33,7 @@ function stepDetail(fire) {
       a.volumeMl != null ? `${a.volumeMl} ml → ${a.cumulativeMl ?? '?'} g on scale` : null,
       a.tempC != null ? `${a.tempC} °C` : null,
       a.flowRate != null ? `flow ${a.flowRate}` : null,
-      a.dripAssist ? 'drip assist' : null,
+      a.dripAssist ? 'with drip assist' : null,
       a.style || null,
       a.valve ? `valve ${a.valve}` : null,
     ].filter(Boolean).join(' · ');

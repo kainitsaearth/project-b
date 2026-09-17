@@ -1,11 +1,11 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=12';
-import * as model from './model.js?v=12';
-import * as R from './recipe.js?v=12';
-import * as T from './timeline.js?v=12';
-import * as C from './coach.js?v=12';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=13';
+import * as model from './model.js?v=13';
+import * as R from './recipe.js?v=13';
+import * as T from './timeline.js?v=13';
+import * as C from './coach.js?v=13';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -852,7 +852,7 @@ export function runTests(log = console) {
     const ds = C.schedule(da, { rig: v60Rig() });
     eq('drip assist: new pours default off', model.createAction('pour').dripAssist, false);
     eq('drip assist: never inherited from the previous pour', model.createAction('pour', [{ action: 'pour', atS: 0, dripAssist: true }]).dripAssist, false);
-    eq('drip assist: the cue says so', C.plannedActions(da, v60Rig()).actions.map(a => a.label), ['POUR', 'POUR · DRIP ASSIST']);
+    eq('drip assist: the cue says so', C.plannedActions(da, v60Rig()).actions.map(a => a.label), ['POUR', 'POUR WITH DRIP ASSIST']);
     const dt = C.applyTap(ds, C.applyTap(ds, [], 0), 100);
     eq('drip assist: stamped on the tapped pour', dt.filter(e => e.type === 'pour').map(e => e.dripAssist), [false, true]);
     eq('drip assist: does not block the plan', R.validateRecipe(da, v60Rig()).length, 0);

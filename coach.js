@@ -39,7 +39,7 @@ export function plannedActions(recipe, rig) {
       if (startsSteep && !valve) skipped.push({ seq, reason: 'valve closure ignored: rig has no valve' });
       list.push({
         type: 'pour', seq, atS: a.atS,
-        label: `${closes ? 'CLOSE VALVE + POUR' : 'POUR'}${a.dripAssist ? ' · DRIP ASSIST' : ''}`,
+        label: `${closes ? 'CLOSE VALVE + POUR' : 'POUR'}${a.dripAssist ? ' WITH DRIP ASSIST' : ''}`,
         volumeMl: a.volumeMl ?? null, cumulativeMl: a.cumulativeMl ?? null,
         tempC: a.tempC ?? null, style: a.style || null, flowRate: a.flowRate ?? null,
         dripAssist: Boolean(a.dripAssist),

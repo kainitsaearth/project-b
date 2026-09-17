@@ -1,10 +1,10 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=12';
-import * as recipeLib from './recipe.js?v=12';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=12';
-import { h, row, fmt, toNum } from './dom.js?v=12';
-import { coachScreen, brewSavedScreen } from './coachScreen.js?v=12';
+import * as model from './model.js?v=13';
+import * as recipeLib from './recipe.js?v=13';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=13';
+import { h, row, fmt, toNum } from './dom.js?v=13';
+import { coachScreen, brewSavedScreen } from './coachScreen.js?v=13';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -433,7 +433,7 @@ export function createUI(view, tabs, actions) {
         ? row('Steep (valve closed)', r.totalSteepS != null ? recipeLib.formatClock(r.totalSteepS) : '—')
         : null,
       r.plan.some(a => a.action === 'pour' && a.dripAssist)
-        ? row('Drip assist', `pour ${r.plan.filter(a => a.action === 'pour').map((a, k) => (a.dripAssist ? k + 1 : null)).filter(Boolean).join(', ')}`)
+        ? row('With drip assist', `pour ${r.plan.filter(a => a.action === 'pour').map((a, k) => (a.dripAssist ? k + 1 : null)).filter(Boolean).join(', ')}`)
         : null,
       r.plan.some(a => a.action === 'pour' && a.dripAssist)
         ? h('p', { class: 'field-hint', id: 'drip-assist-comp' }, '⚠ Practice only: PCBL rules ban drip assists (nothing between spout and bed).')
@@ -481,7 +481,7 @@ export function createUI(view, tabs, actions) {
         h('label', { class: 'toggle toggle-mini' },
           h('input', { type: 'checkbox', id: inputId('dripAssist'), disabled: frozen, checked: Boolean(a.dripAssist),
             onchange: ev => set('dripAssist', ev.target.checked) }),
-          h('span', { class: 'mini-label' }, 'Drip assist')),
+          h('span', { class: 'mini-label' }, 'With drip assist')),
       ];
     } else if (a.action === 'swirl') {
       body = [num('count', 'Swirls')];
