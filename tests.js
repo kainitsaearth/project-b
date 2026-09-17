@@ -1,11 +1,12 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=15';
-import * as model from './model.js?v=15';
-import * as R from './recipe.js?v=15';
-import * as T from './timeline.js?v=15';
-import * as C from './coach.js?v=15';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=16';
+import * as model from './model.js?v=16';
+import * as R from './recipe.js?v=16';
+import * as T from './timeline.js?v=16';
+import * as C from './coach.js?v=16';
+import * as Bw from './brew.js?v=16';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -897,6 +898,72 @@ export function runTests(log = console) {
     eq('reminder: the cue carries the scale reading and the tare', C.plannedActions(r, v60Rig()).actions.map(a => [a.scaleMl, a.tareBefore]),
       [[60, false], [90, true], [140, false], [50, true], [50, true]]);
     eq('reminder: none without drip assist or tare (Yuan unchanged)', C.schedule(yuanRecipe(), { rig: switchRig() }).events.some(e => e.kind === 'prep'), false);
+  }
+
+  // ================= brew entry: clone-last, diff strip, blank slate, reconciliation (brew.js) =================
+  {
+    const yuan = yuanRecipe();
+    const past = { ...brewFixture(), id: 'b-old', beanId: 'bean-guji', recipeId: yuan.id, rigId: yuan.rigId, startedAt: '2026-09-15T08:00:00Z' };
+    const last = { ...brewFixture(), id: 'b-last', beanId: 'bean-guji', recipeId: yuan.id, rigId: yuan.rigId, startedAt: '2026-09-16T08:00:00Z',
+      grind: { setting: 26, unit: 'clicks' }, doseG: 16, bypassG: 0, waterId: 'water-seed-omb-75', preheat: { dripper: true, server: true } };
+    const other = { ...brewFixture(), id: 'b-other', beanId: 'bean-other', startedAt: '2026-09-17T08:00:00Z' };
+    const sessions = [{ id: 's1', brews: [last, past] }, { id: 's2', brews: [other] }];
+
+    eq('history: newest first across sessions', Bw.allBrews(sessions).map(b => b.id), ['b-other', 'b-last', 'b-old']);
+    eq('history: last brew on a bean', Bw.lastBrewOnBean(sessions, 'bean-guji').id, 'b-last');
+    eq('history: no bean → nothing to clone', Bw.lastBrewOnBean(sessions, null), null);
+
+    const d = Bw.cloneDraft({ ...yuan, beanId: 'bean-guji' }, sessions);
+    eq('clone: copies the last brew on the bean', [d.mode, d.changedFrom, d.grind.setting, d.doseG, d.waterId, d.preheat.server], ['clone', 'b-last', 26, 16, 'water-seed-omb-75', true]);
+    eq('clone: an untouched clone has no changes', Bw.variableDiff(last, d), []);
+
+    // Plan check: clone, change grind only → exactly one field
+    const grindOnly = { ...d, grind: { ...d.grind, setting: 28 } };
+    eq('PLAN CHECK: change grind only → the strip shows exactly one field', Bw.variableDiff(last, grindOnly),
+      [{ field: 'grind.setting', label: 'grind', from: 26, to: 28 }]);
+    eq('warning: one change → none', Bw.attributionWarning(Bw.variableDiff(last, grindOnly)), null);
+
+    // Plan check: change three → warning, dismissible
+    const three = { ...grindOnly, doseG: 18, waterId: 'water-seed-omb-100' };
+    const changes3 = Bw.variableDiff(last, three);
+    eq('diff: three changes, in display order', changes3.map(c => c.label), ['water', 'grind', 'dose']);
+    const w = Bw.attributionWarning(changes3);
+    eq('PLAN CHECK: three changes → the attribution warning', [w?.count, w?.message], [3, "3 variables changed. This result won't be attributable to any one of them."]);
+    eq('PLAN CHECK: the warning is dismissible', Bw.attributionWarning(changes3, w.signature), null);
+    eq('warning: comes back when a fourth variable changes', Bw.attributionWarning(Bw.variableDiff(last, { ...three, bypassG: 20 }), w.signature)?.count, 4);
+    eq('warning: two changes → none', Bw.attributionWarning(Bw.variableDiff(last, { ...grindOnly, doseG: 18 })), null);
+
+    eq('diff: empty = empty (null, undefined, blank text)', Bw.variableDiff({ bypassG: null, grind: { unit: '' } }, { grind: {} }), []);
+    eq('diff: 0 is a value, so 0 → 20 g bypass is a change', Bw.variableDiff({ bypassG: 0 }, { bypassG: 20 }).map(c => c.field), ['bypassG']);
+    eq('diff: a new recipe version counts as one change', Bw.variableDiff(last, { ...d, recipeId: 'recipe-yuan-v2' }).map(c => c.field), ['recipeId']);
+    eq('diff: outcomes, timeline and notes never count', Bw.variableDiff(last, { ...last, outputMl: 1, timeline: [], notes: 'x', assessment: {}, daysOffRoast: 99 }), []);
+    eq('diff: no parent → unknown, not "nothing changed"', Bw.variableDiff(null, d), Bw.UNKNOWN);
+
+    const blank = Bw.blankDraft({ ...yuan, beanId: 'bean-guji', waterId: 'w1' });
+    eq('blank slate: only what the recipe says, no parent', [blank.mode, blank.changedFrom, blank.doseG, blank.waterId, blank.grind.setting], ['blank', null, 17, 'w1', null]);
+    const firstOnBean = Bw.cloneDraft(yuan, sessions, 'bean-new');
+    eq('clone: first brew on a bean is blank but stays in clone mode', [firstOnBean.mode, firstOnBean.changedFrom, firstOnBean.beanId], ['clone', null, 'bean-new']);
+    eq('clone: re-pointed at the recipe being brewed', Bw.cloneDraft({ ...yuan, id: 'recipe-yuan-v2', beanId: 'bean-guji' }, sessions).recipeId, 'recipe-yuan-v2');
+    eq('parent: found by id', Bw.parentOf(d, sessions).id, 'b-last');
+
+    // Reconciliation
+    const brew = { doseG: 17, bypassG: null, outputMl: null, timeline: [
+      { type: 'pour', atS: 0, volumeMl: 50, tempC: 92, tap: 1 }, { type: 'valve', atS: 40, tap: 2 },
+      { type: 'pour', atS: 45, volumeMl: 100, tempC: 92, tap: 3 }, { type: 'pour', atS: 80, volumeMl: 60, tempC: 84, tap: 4 }] };
+    eq('reconcile: outcomes unknown until output is entered', Bw.outcomes(brew), { waterInMl: 210, retentionMl: Bw.UNKNOWN, trueRatio: Bw.UNKNOWN });
+    let r = Bw.setMeasured(brew, 'outputMl', 180);
+    eq('reconcile: retention and true ratio computed', [r.waterInMl, r.retentionMl, Math.round(r.trueRatio * 100) / 100], [210, 30, 10.59]);
+    r = Bw.reconcilePour(r, 1, 'volumeMl', 110);
+    eq('reconcile: correcting pour 2 changes water in, keeps its time', [r.waterInMl, r.retentionMl, r.timeline[2].atS, r.timeline[2].reconciled], [220, 40, 45, true]);
+    eq('reconcile: only the chosen pour changes', r.timeline.map(e => e.volumeMl ?? null), [50, null, 110, 60]);
+    r = Bw.setMeasured(r, 'bypassG', 20);
+    eq('reconcile: bypass counts as water in', r.waterInMl, 240);
+    eq('reconcile: output above water in → retention unknown', Bw.setMeasured(r, 'outputMl', 300).retentionMl, Bw.UNKNOWN);
+    eq('reconcile: a blanked pour volume → water in unknown', Bw.reconcilePour(r, 0, 'volumeMl', null).waterInMl, Bw.UNKNOWN);
+    eq('reconcile: times and other fields are not editable through it', [Bw.reconcilePour(r, 0, 'atS', 5).timeline[0].atS, Bw.setMeasured(r, 'doseG', 99).doseG], [0, 17]);
+    eq('reconcile: issues until output is in', Bw.reconcileIssues(brew), ['Output not entered']);
+    eq('reconcile: none once reconciled', Bw.reconcileIssues(r), []);
+    eq('reconcile: pure — the input brew is untouched', brew.timeline[2].volumeMl, 100);
   }
 
   // ---- model ----

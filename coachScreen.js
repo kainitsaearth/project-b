@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=15';
-import * as model from './model.js?v=15';
-import * as recipeLib from './recipe.js?v=15';
-import * as C from './coach.js?v=15';
+import { h } from './dom.js?v=16';
+import * as model from './model.js?v=16';
+import * as recipeLib from './recipe.js?v=16';
+import * as C from './coach.js?v=16';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {
@@ -120,6 +120,25 @@ export function coachScreen(initialState, recipe, actions) {
 
   const el = h('section', { class: 'coach', id: 'coach' });
 
+  // The brew's setup (Step 8), so you can check grind and dose before tapping.
+  function setupSummary() {
+    const d = state.brewDraft?.recipeId === recipe.id ? state.brewDraft : null;
+    const href = `#/setup/${encodeURIComponent(recipe.id)}`;
+    if (!d) {
+      return h('div', { class: 'hint-box', id: 'coach-setup' }, 'No setup yet. It will copy your last brew on this bean. ',
+        h('a', { href, id: 'coach-setup-edit' }, 'Set up brew'));
+    }
+    const name = (kind, id) => (id && state[kind][id] ? model.displayName(kind, state[kind][id]) : '—');
+    const tile = (label, value) => h('div', { class: 'tile' }, h('span', { class: 'tile-label' }, label), h('span', { class: 'tile-value' }, value));
+    return h('div', { class: 'coach-setup', id: 'coach-setup' },
+      h('div', { class: 'tile-row' },
+        tile('Bean', name('beans', d.beanId)),
+        tile('Grind', d.grind?.setting != null ? `${d.grind.setting}${d.grind.unit ? ` ${d.grind.unit}` : ''}` : '—'),
+        tile('Dose', d.doseG != null ? `${d.doseG} g` : '—'),
+        tile('Water', name('waters', d.waterId))),
+      h('a', { class: 'btn btn-small', href, id: 'coach-setup-edit' }, 'Change setup'));
+  }
+
   // ---- idle: the plan, settings, START ----
   function idleView() {
     const other = state.activeBrew && !mine() ? state.recipes[state.activeBrew.recipeId] : null;
@@ -135,6 +154,7 @@ export function coachScreen(initialState, recipe, actions) {
         h('h2', {}, model.displayName('recipes', recipe)),
         h('span', { class: 'badge badge-version' }, `v${recipe.version ?? 1}`)),
       h('p', { class: 'list-sub' }, `${model.displayName('rigs', rig)} · ${fires.length} cues · ${recipeLib.formatClock(sched.endS)}`),
+      setupSummary(),
       h('ol', { class: 'coach-plan', id: 'coach-plan' }, fires.map(f => {
         const prep = sched.events.find(e => e.kind === 'prep' && e.fireAtS === f.atS);
         return h('li', {},
@@ -367,47 +387,4 @@ export function coachScreen(initialState, recipe, actions) {
       wakeLock = null;
     },
   };
-}
-
-// ---------- after the brew ----------
-
-// Deliberately shows NO phases or drift: spec §6.3 "evidence follows judgement".
-// They are computed and saved; the assessment (Step 9) reveals them after scoring.
-export function brewSavedScreen(state, brewId) {
-  let brew = null;
-  for (const s of Object.values(state.sessions)) {
-    const found = (s.brews ?? []).find(b => b.id === brewId);
-    if (found) { brew = found; break; }
-  }
-  if (!brew) {
-    return h('section', { class: 'screen' },
-      h('a', { class: 'back', href: '#/recipes' }, '‹ Recipes'),
-      h('p', { class: 'empty' }, "This brew doesn't exist any more."));
-  }
-  const recipe = state.recipes[brew.recipeId];
-  const endS = brew.timeline.find(e => e.type === 'cut' || e.type === 'drawdown-complete')?.atS ?? null;
-  const when = new Date(brew.startedAt);
-
-  return h('section', { class: 'screen', id: 'brew-saved' },
-    h('a', { class: 'back', href: `#/recipes/${encodeURIComponent(brew.recipeId)}` }, '‹ Recipe'),
-    h('h2', {}, '✓ Brew saved'),
-    h('p', { class: 'list-sub' },
-      `${recipe ? model.displayName('recipes', recipe) : 'Deleted recipe'} v${brew.recipeVersion ?? 1} · `
-      + `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`),
-    h('div', { class: 'derived' },
-      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Ended by'),
-        h('span', { class: 'derived-value', id: 'brew-ended-by' }, brew.endedBy === 'cut' ? 'cut (dripper lifted)' : 'drawdown finished')),
-      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Brew time'),
-        h('span', { class: 'derived-value' }, endS != null ? clock(endS) : '—')),
-      h('div', { class: 'derived-row' }, h('span', { class: 'derived-label' }, 'Taps recorded'),
-        h('span', { class: 'derived-value', id: 'brew-taps' }, String(new Set(brew.timeline.map(e => e.tap)).size)))),
-    h('div', { class: 'alert alert-info', id: 'drift-hidden' },
-      h('strong', {}, 'Phases and drift are hidden for now'),
-      h('p', {}, 'Taste and score the cup first, so the numbers can’t steer your score. They are saved and will appear after the assessment.')),
-    h('h3', { class: 'section-title' }, 'Your taps'),
-    h('ol', { class: 'coach-done' }, (brew.tapDrift ?? []).map(d => h('li', {},
-      h('span', { class: 'coach-plan-time' }, clock(d.actualAtS)),
-      h('span', {}, d.label),
-      h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`)))),
-    recipe ? h('a', { class: 'btn btn-primary', href: `#/brew/${encodeURIComponent(recipe.id)}`, id: 'brew-again' }, 'Brew again') : null);
 }

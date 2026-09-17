@@ -376,3 +376,25 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
 .coach-prep { font-size: 1.5rem; font-weight: 800; text-align: center; padding: 10px 12px; border-radius: 12px; background: var(--fg); color: var(--bg); letter-spacing: .02em; }
 .coach-prep[hidden] { display: none; }
 .coach-plan-prep { grid-column: 2; font-weight: 700; color: var(--accent); }
+
+/* ---------- brew setup & reconciliation (Step 8) ---------- */
+
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.segmented .btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.diff-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); position: sticky; top: 0; z-index: 2; }
+.diff-count { font-weight: 800; margin-right: 4px; }
+.diff-chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent); font-size: .875rem; font-variant-numeric: tabular-nums; }
+.diff-chip b { font-weight: 700; }
+.diff-none { color: var(--muted); font-size: .875rem; }
+.alert-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, var(--surface)); }
+
+.coach-setup { display: flex; flex-direction: column; gap: 8px; }
+.coach-setup .tile-value { font-size: 1rem; }
+.coach-setup .btn { align-self: flex-start; }
+
+.reconcile { display: flex; flex-direction: column; gap: 8px; }
+.reconcile-pour { display: grid; grid-template-columns: 3rem 3.5rem 1fr 1fr; align-items: end; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); }
+.reconcile-time { font-variant-numeric: tabular-nums; font-weight: 700; padding-bottom: 10px; }
+.reconcile-name { font-weight: 600; padding-bottom: 10px; }

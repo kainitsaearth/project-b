@@ -1,10 +1,11 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=15';
-import * as recipeLib from './recipe.js?v=15';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=15';
-import { h, row, fmt, toNum } from './dom.js?v=15';
-import { coachScreen, brewSavedScreen } from './coachScreen.js?v=15';
+import * as model from './model.js?v=16';
+import * as recipeLib from './recipe.js?v=16';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=16';
+import { h, row, fmt, toNum } from './dom.js?v=16';
+import { coachScreen } from './coachScreen.js?v=16';
+import { setupScreen, setupKey, resultScreen } from './brewScreens.js?v=16';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],
@@ -36,6 +37,7 @@ export function createUI(view, tabs, actions) {
   let rigPrompt = null;        // { recipeId, rigId, conflicts } — a refused rig switch awaiting a decision
   let scrollToLastStep = false;
   let coach = null;            // live pour coach: { el, refresh, destroy }
+  let flow = null;             // setup / result screen: { el, refresh } — refreshed in place while typing
 
   function render(state, route) {
     lastState = state;
@@ -43,7 +45,7 @@ export function createUI(view, tabs, actions) {
     if (rigPrompt && rigPrompt.recipeId !== route.id) rigPrompt = null;
 
     // The coach owns its screen: tabs hidden, its own frame loop, refreshed (never rebuilt) on taps.
-    const fullScreen = route.kind === 'brew' || route.kind === 'result';
+    const fullScreen = route.kind === 'brew' || route.kind === 'result' || route.kind === 'setup';
     tabs.hidden = fullScreen;
     if (route.kind !== 'brew' && coach) { coach.destroy(); coach = null; }
     if (route.kind === 'brew') {
@@ -60,15 +62,18 @@ export function createUI(view, tabs, actions) {
       scrollTo(0, 0);
       return;
     }
-    if (route.kind === 'result') {
-      const key = `result/${route.id}`;
-      if (mountedKey === key) return;
+    if (route.kind === 'result' || route.kind === 'setup') {
+      const key = route.kind === 'setup' ? setupKey(state, route.id) : `result/${route.id}`;
+      if (flow && mountedKey === key) { flow.refresh(state); return; }
+      const sameScreen = mountedKey?.split('|')[0] === key.split('|')[0];
       mountedKey = key;
       refreshDerived = null;
-      view.replaceChildren(brewSavedScreen(state, route.id));
-      scrollTo(0, 0);
+      flow = route.kind === 'setup' ? setupScreen(state, route.id, actions) : resultScreen(state, route.id, actions);
+      view.replaceChildren(flow.el);
+      if (!sameScreen) scrollTo(0, 0);
       return;
     }
+    flow = null;
     renderTabs(route.kind);
 
     if (!route.id) {
@@ -350,7 +355,8 @@ export function createUI(view, tabs, actions) {
     const otherBrew = state.activeBrew && state.activeBrew.recipeId !== recipe.id ? state.recipes[state.activeBrew.recipeId] : null;
     const brewBtn = h('button', {
       type: 'button', class: 'btn btn-primary btn-brew', id: 'brew-recipe',
-      onclick: () => { location.hash = `#/brew/${encodeURIComponent(otherBrew ? otherBrew.id : recipe.id)}`; },
+      // A brew in progress resumes; otherwise set up the brew first (clone-last, Step 8).
+      onclick: () => (state.activeBrew ? (location.hash = `#/brew/${encodeURIComponent(state.activeBrew.recipeId)}`) : actions.newBrew(recipe.id)),
     });
     const brewHint = h('small', { class: 'field-hint', id: 'brew-hint' });
     refreshers.push(r => {

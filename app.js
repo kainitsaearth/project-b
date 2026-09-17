@@ -3,12 +3,14 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=15';
-import * as model from './model.js?v=15';
-import * as recipeLib from './recipe.js?v=15';
-import * as coachLib from './coach.js?v=15';
-import * as timelineLib from './timeline.js?v=15';
-import { createUI } from './ui.js?v=15';
+import * as store from './store.js?v=16';
+import * as model from './model.js?v=16';
+import * as recipeLib from './recipe.js?v=16';
+import * as coachLib from './coach.js?v=16';
+import * as timelineLib from './timeline.js?v=16';
+import * as brewLib from './brew.js?v=16';
+import { daysOffRoast } from './compute.js?v=16';
+import { createUI } from './ui.js?v=16';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -20,6 +22,9 @@ const state = {
   // The brew being coached: { id, recipeId, startedAtMs, timeline }. Saved with the working
   // state, so if Android kills the app mid-brew, reopening resumes with every tap intact.
   activeBrew: null,
+  // The brew being set up (Step 8): clone-last or blank slate, edited before the coach starts.
+  // { recipeId, mode, changedFrom, ...variables, notes, dismissedWarning }. Saved like activeBrew.
+  brewDraft: null,
 };
 
 // JSON of what is known to be on disk, per record.
@@ -41,7 +46,7 @@ function setSaveStatus(ok, err) {
   if (!ok) console.error('[store] save failed:', err);
 }
 
-const kvValue = () => ({ schema: SCHEMA, meta: state.meta, activeBrew: state.activeBrew });
+const kvValue = () => ({ schema: SCHEMA, meta: state.meta, activeBrew: state.activeBrew, brewDraft: state.brewDraft });
 
 // Everything that differs from the last successful write, as one batch.
 function pendingOps() {
@@ -114,6 +119,7 @@ async function load() {
   // Step 1 stored { schema: 1, counter }. Only `meta` carries forward.
   if (kv?.meta) Object.assign(state.meta, kv.meta);
   if (kv?.activeBrew && Array.isArray(kv.activeBrew.timeline)) state.activeBrew = kv.activeBrew;
+  if (kv?.brewDraft?.recipeId) state.brewDraft = kv.brewDraft;
   const snap = emptySnapshot();
   snap.kv = kv === undefined ? null : JSON.stringify(kv);
   for (const name of model.ENTITY_STORES) {
@@ -152,7 +158,7 @@ function seed() {
 
 // ---------- routing ----------
 
-const ROUTE = /^#\/(recipes|beans|rigs|waters|brew|result)(?:\/([^/]+))?$/;
+const ROUTE = /^#\/(recipes|beans|rigs|waters|setup|brew|result)(?:\/([^/]+))?$/;
 
 function currentRoute() {
   const m = ROUTE.exec(location.hash);
@@ -261,6 +267,66 @@ export const actions = {
   setCoachSetting(key, value) {
     mutate(s => { s.meta.coach = { ...(s.meta.coach ?? {}), [key]: value }; });
   },
+  // ---- brew setup (Step 8) ----
+  // Opens setup for a recipe. Keeps a draft already being edited for it; otherwise clones
+  // the last brew on the recipe's bean (blank if there is none).
+  newBrew(recipeId, { fresh = false } = {}) {
+    const recipe = state.recipes[recipeId];
+    if (!recipe) return;
+    if (state.activeBrew) { navigate(`#/brew/${encodeURIComponent(state.activeBrew.recipeId)}`); return; }
+    if (fresh || state.brewDraft?.recipeId !== recipeId) {
+      mutate(s => { s.brewDraft = brewLib.cloneDraft(recipe, Object.values(s.sessions)); });
+    }
+    navigate(`#/setup/${encodeURIComponent(recipeId)}`);
+  },
+  draftClone() {
+    const recipe = state.brewDraft && state.recipes[state.brewDraft.recipeId];
+    if (!recipe) return;
+    mutate(s => {
+      const notes = s.brewDraft.notes;
+      s.brewDraft = { ...brewLib.cloneDraft(recipe, Object.values(s.sessions), s.brewDraft.beanId ?? recipe.beanId), notes };
+    });
+  },
+  draftBlank() {
+    const recipe = state.brewDraft && state.recipes[state.brewDraft.recipeId];
+    if (!recipe) return;
+    mutate(s => {
+      const { notes, beanId } = s.brewDraft;
+      s.brewDraft = { ...brewLib.blankDraft(recipe), beanId: beanId ?? recipe.beanId ?? null, notes };
+    });
+  },
+  // key: a variable ('doseG', 'grind.setting', 'preheat.server' …) or 'notes'.
+  // Picking a bean while cloning re-clones from that bean's last brew.
+  setDraft(key, value) {
+    const d = state.brewDraft;
+    const recipe = d && state.recipes[d.recipeId];
+    if (!recipe) return;
+    if (key === 'beanId' && d.mode === 'clone') {
+      mutate(s => { s.brewDraft = { ...brewLib.cloneDraft(recipe, Object.values(s.sessions), value || null), notes: d.notes }; });
+      return;
+    }
+    mutate(s => {
+      const [a, b] = key.split('.');
+      if (b) s.brewDraft[a] = { ...(s.brewDraft[a] ?? {}), [b]: value };
+      else s.brewDraft[a] = value;
+    });
+  },
+  dismissDraftWarning(signature) {
+    if (state.brewDraft) mutate(s => { s.brewDraft.dismissedWarning = signature; });
+  },
+
+  // ---- after the brew: reconciliation ----
+  // fn: brew → new brew (pure, from brew.js). Times are never edited here.
+  editBrew(brewId, fn) {
+    for (const session of Object.values(state.sessions)) {
+      const i = (session.brews ?? []).findIndex(b => b.id === brewId);
+      if (i < 0) continue;
+      mutate(s => { s.sessions[session.id].brews[i] = fn(s.sessions[session.id].brews[i]); });
+      return true;
+    }
+    return false;
+  },
+
   // startedAtMs = wall clock at brew time 0. With tapAtS the first step's tap is recorded in the
   // same save, so the brew and its first pour can't be split by the app being killed.
   startBrew(recipeId, startedAtMs, { tapAtS = null, countInS = 0 } = {}) {
@@ -269,7 +335,14 @@ export const actions = {
     if (recipeLib.validateRecipe(recipe, state.rigs[recipe.rigId]).length) return false;
     const sched = scheduleFor(recipeId);
     const timeline = tapAtS === null ? [] : coachLib.applyTap(sched, [], tapAtS, 'main', { countInS });
-    mutate(s => { s.activeBrew = { id: model.uid('brew'), recipeId, startedAtMs, timeline }; });
+    // The setup travels with the brew. Arriving without one (an old link) clones as setup would.
+    const setup = state.brewDraft?.recipeId === recipeId
+      ? state.brewDraft
+      : brewLib.cloneDraft(recipe, Object.values(state.sessions));
+    mutate(s => {
+      s.activeBrew = { id: model.uid('brew'), recipeId, startedAtMs, timeline, setup };
+      s.brewDraft = null;
+    });
     flush();   // a started brew must survive the app being killed in the next second
     return true;
   },
@@ -291,7 +364,8 @@ export const actions = {
   discardBrew() {
     const recipeId = state.activeBrew?.recipeId;
     if (!recipeId) return;
-    mutate(s => { s.activeBrew = null; });
+    // The setup isn't lost with the taps: it goes back to being the draft.
+    mutate(s => { s.brewDraft = s.activeBrew.setup ?? s.brewDraft; s.activeBrew = null; });
     flush();
     goToEntity('recipes', recipeId);
   },
@@ -333,12 +407,18 @@ function finishBrew() {
   const started = new Date(brew.startedAtMs);   // wall clock at brew time 0
   const date = localISODate(started);
   const sessionId = `session-${date}`;
-  const record = {
+  const setup = brew.setup ?? brewLib.blankDraft(recipe);
+  const vars = brewLib.variablesOf({ ...setup, recipeId: recipe.id, rigId: recipe.rigId });
+  const bean = vars.beanId ? state.beans[vars.beanId] : null;
+  const parent = brewLib.parentOf(setup, Object.values(state.sessions));
+  const changes = brewLib.variableDiff(parent, vars);
+  const record = brewLib.withOutcomes({
     id: brew.id, sessionId,
     startedAt: started.toISOString(),
-    recipeId: recipe.id, recipeVersion: recipe.version ?? 1,
-    beanId: recipe.beanId ?? null, rigId: recipe.rigId, waterId: recipe.waterId ?? null,
-    doseG: recipe.doseG ?? null, cueLeadS: sched.cueLeadS,
+    recipeVersion: recipe.version ?? 1,
+    ...vars,
+    daysOffRoast: bean ? daysOffRoast(bean.roastDate, date) : 'unknown',
+    cueLeadS: sched.cueLeadS,
     timeline: brew.timeline,
     endedBy: analysis.endedBy,
     phases: analysis.phases,
@@ -346,8 +426,12 @@ function finishBrew() {
     drift: analysis.drift,
     pourDoneUsed: analysis.pourDoneUsed,
     tapDrift: coachLib.tapDrift(sched, brew.timeline),
-    assessment: null, changedFrom: null, notes: '',
-  };
+    assessment: null,
+    changedFrom: parent ? parent.id : null,
+    diff: changes === brewLib.UNKNOWN ? 'unknown' : changes.map(c => c.field),   // computed, never self-reported
+    outputMl: null, serveTempC: null,
+    notes: setup.notes ?? '',
+  });
   mutate(s => {
     s.sessions[sessionId] ??= { id: sessionId, date, mode: 'practice', brews: [] };
     s.sessions[sessionId].brews.push(record);
@@ -381,7 +465,7 @@ async function boot() {
 
   const params = new URLSearchParams(location.search);
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=15').then(m => m.runTests());
+    import('./tests.js?v=16').then(m => m.runTests());
   }
 }
 
