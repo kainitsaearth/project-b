@@ -21,12 +21,13 @@ export const ANSWERS = Object.freeze(['yes', 'no', 'unsure']);
 // still valid, so brews scored before this keep their meaning.
 export const WINDOWS = Object.freeze(['under', 'slightly-under', 'in', 'slightly-over', 'over']);
 export const WINDOW_LABELS = Object.freeze({
-  'under': 'UNDER · sour, hollow',
+  'under': 'UNDER',
   'slightly-under': 'slightly under',
-  'in': 'IN · sweet, clean',
+  'in': 'IN',
   'slightly-over': 'slightly over',
-  'over': 'OVER · drying, bitter',
+  'over': 'OVER',
 });
+export const WINDOW_HINT = 'under = sour, hollow, thin · in = sweet, clean, balanced · over = drying, bitter, hollow finish';
 // Which way the next brew should move. 'in' → null.
 export function direction(window) {
   if (window === 'under' || window === 'slightly-under') return 'more extraction';

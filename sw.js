@@ -8,11 +8,12 @@
 //                      when online, and airplane mode still opens the app
 //   everything else    cache first — asset URLs carry ?v=, so a cached copy is never stale
 
-const VERSION = '?v=23';
+const VERSION = '?v=24';
 const CACHE = `project-b${VERSION}`;
 
 const MODULES = [
   'app.js', 'assessScreen.js', 'assessment.js', 'brew.js', 'brewScreens.js', 'coach.js',
+  'advice.js', 'adviceCard.js',
   'coachScreen.js', 'compute.js', 'dataScreen.js', 'dom.js', 'exportData.js', 'model.js',
   'recipe.js', 'store.js', 'timeline.js', 'ui.js',
 ];

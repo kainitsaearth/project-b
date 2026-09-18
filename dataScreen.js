@@ -1,8 +1,8 @@
 // dataScreen.js — Step 10: back up your data (JSON export), install, offline status,
 // notification permission for the cooled reminder.
 
-import { h, row } from './dom.js?v=23';
-import * as X from './exportData.js?v=23';
+import { h, row } from './dom.js?v=24';
+import * as X from './exportData.js?v=24';
 
 // The version this build was loaded as — the ?v= on this module's own URL, bumped by the deploy loop.
 export const APP_VERSION = Number(new URL(import.meta.url).searchParams.get('v')) || null;

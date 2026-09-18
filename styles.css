@@ -444,3 +444,13 @@ td.flag-cut, td.flag-live { color: var(--muted); }
 .cut-reason { display: flex; flex-direction: column; gap: 8px; }
 .cut-reason-btn[aria-pressed="true"] { background: var(--danger); color: var(--danger-fg); border-color: var(--danger); }
 
+
+/* ---------- what to try next ---------- */
+.advice { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.advice-head { font-size: 1.0625rem; }
+.advice-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.advice-list li { display: flex; flex-direction: column; gap: 2px; padding-left: 14px; border-left: 3px solid var(--border); }
+.advice-list li.advice-execution { border-left-color: var(--warn); }
+.advice-list li.advice-rule { border-left-color: var(--accent); }
+.advice-text { font-weight: 700; }
+.advice-why { color: var(--muted); }

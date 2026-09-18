@@ -1,14 +1,14 @@
 // ui.js — rendering and event wiring. Reads state, calls actions; never saves.
 
-import * as model from './model.js?v=23';
-import * as recipeLib from './recipe.js?v=23';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=23';
-import { h, row, fmt, toNum } from './dom.js?v=23';
-import { coachScreen } from './coachScreen.js?v=23';
-import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=23';
-import { assessScreen, assessKey } from './assessScreen.js?v=23';
-import { dataScreen } from './dataScreen.js?v=23';
-import * as exportLib from './exportData.js?v=23';
+import * as model from './model.js?v=24';
+import * as recipeLib from './recipe.js?v=24';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=24';
+import { h, row, fmt, toNum } from './dom.js?v=24';
+import { coachScreen } from './coachScreen.js?v=24';
+import { setupScreen, setupKey, resultScreen, resultKey } from './brewScreens.js?v=24';
+import { assessScreen, assessKey } from './assessScreen.js?v=24';
+import { dataScreen } from './dataScreen.js?v=24';
+import * as exportLib from './exportData.js?v=24';
 
 const LABELS = {
   recipes: ['Recipes', 'recipe'],

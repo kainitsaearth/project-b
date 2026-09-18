@@ -3,9 +3,10 @@
 // timing, no diff, nothing from any other brew. It reads only this brew's own assessment.
 // Answers save as you tap; the cooled reminder buzzes when it's time to taste again.
 
-import { h, toNum } from './dom.js?v=23';
-import * as model from './model.js?v=23';
-import * as A from './assessment.js?v=23';
+import { h, toNum } from './dom.js?v=24';
+import * as model from './model.js?v=24';
+import * as A from './assessment.js?v=24';
+import { adviceCard } from './adviceCard.js?v=24';
 
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -59,6 +60,10 @@ export function assessScreen(initialState, brewId, actions) {
       choice(`${temp}.${c.key}`, A.ANSWERS))));
 
   const tallyEl = h('div', { class: 'assess-tally', id: 'assess-tally' });
+  // "What to try next", shown as soon as the window is chosen. No drift in it: that stays
+  // hidden until submit, so the advice can't smuggle the evidence in early.
+  const adviceEl = h('div', { id: 'advice-slot' });
+  let adviceFor = undefined;
   const cooledTimerEl = h('div', { class: 'cooled-timer', id: 'cooled-timer' });
   const skipBtn = h('button', { type: 'button', class: 'btn btn-small', id: 'cooled-skip', onclick: () => set('cooledSkipped', !current('cooledSkipped')) });
   const cooledBody = h('div', {}, tempBlock('cooled'),
@@ -92,6 +97,8 @@ export function assessScreen(initialState, brewId, actions) {
 
     h('h3', { class: 'section-title' }, 'Where does it sit?'),
     choice('window', A.WINDOWS, A.WINDOWS.map(w => A.WINDOW_LABELS[w])),
+    h('small', { class: 'field-hint' }, A.WINDOW_HINT),
+    adviceEl,
 
     tallyEl,
 
@@ -182,6 +189,11 @@ export function assessScreen(initialState, brewId, actions) {
     tallyEl.dataset.atRisk = String(t.atRisk);
     tallyEl.dataset.level = v.level;
     tallyEl.textContent = `At risk: ${t.atRisk} / 3 · ${v.text}`;
+    if (a.window !== adviceFor) {
+      adviceFor = a.window;
+      const card = adviceCard(state, { ...b, assessment: a }, { includeDrift: false });
+      adviceEl.replaceChildren(...(card ? [card] : []));
+    }
     const issues = A.submitIssues(a);
     issuesEl.replaceChildren(...issues.map(x => h('li', {}, x)));
     issuesEl.hidden = issues.length === 0;

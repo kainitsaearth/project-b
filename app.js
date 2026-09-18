@@ -3,15 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=23';
-import * as model from './model.js?v=23';
-import * as recipeLib from './recipe.js?v=23';
-import * as coachLib from './coach.js?v=23';
-import * as timelineLib from './timeline.js?v=23';
-import * as brewLib from './brew.js?v=23';
-import * as assessLib from './assessment.js?v=23';
-import { daysOffRoast } from './compute.js?v=23';
-import { createUI } from './ui.js?v=23';
+import * as store from './store.js?v=24';
+import * as model from './model.js?v=24';
+import * as recipeLib from './recipe.js?v=24';
+import * as coachLib from './coach.js?v=24';
+import * as timelineLib from './timeline.js?v=24';
+import * as brewLib from './brew.js?v=24';
+import * as assessLib from './assessment.js?v=24';
+import { daysOffRoast } from './compute.js?v=24';
+import { createUI } from './ui.js?v=24';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -544,7 +544,7 @@ async function boot() {
   }
 
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=23').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
+    import('./tests.js?v=24').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
   }
 }
 

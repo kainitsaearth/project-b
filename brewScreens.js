@@ -3,12 +3,13 @@
 // renders them and calls actions. Inputs are built once and refreshed in place, so typing
 // never rebuilds the form (the phone keyboard stays up).
 
-import { h, row, fmt, toNum } from './dom.js?v=23';
-import * as recipeLib from './recipe.js?v=23';
-import * as model from './model.js?v=23';
-import * as B from './brew.js?v=23';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=23';
-import * as A from './assessment.js?v=23';
+import { h, row, fmt, toNum } from './dom.js?v=24';
+import * as recipeLib from './recipe.js?v=24';
+import * as model from './model.js?v=24';
+import * as B from './brew.js?v=24';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=24';
+import * as A from './assessment.js?v=24';
+import { adviceCard } from './adviceCard.js?v=24';
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '—';
@@ -241,7 +242,7 @@ export function resultScreen(initialState, brewId, actions) {
         h('tbody', {}, A.CATEGORIES.map(c => h('tr', { class: t.categories[c.key] ? 'at-risk' : '' },
           h('th', {}, c.label), cell(a.hot?.[c.key]), a.cooledSkipped ? h('td', { class: 'ans' }, 'not tasted') : cell(a.cooled?.[c.key]))))),
       h('div', { class: 'derived' },
-        row('Window', h('span', { id: 'reveal-window' }, a.window ? A.WINDOW_LABELS[a.window].split(' · ')[0].toUpperCase() : '—')),
+        row('Window', h('span', { id: 'reveal-window' }, a.window ? A.WINDOW_LABELS[a.window].toUpperCase() : '—')),
         A.direction(a.window) ? row('Next brew', `needs ${A.direction(a.window)}`) : null,
         row('One flaw', a.oneFlaw || '—'),
         a.descriptors ? row('Descriptors', a.descriptors) : null,
@@ -250,7 +251,7 @@ export function resultScreen(initialState, brewId, actions) {
       h('a', { class: 'btn btn-small', id: 'assess-edit', href: `#/assess/${encodeURIComponent(brewId)}` }, 'Change scores'),
 
       options.length ? h('div', { class: 'attribution', id: 'attribution' },
-        h('strong', {}, `It went ${A.WINDOW_LABELS[a.window].split(' · ')[0].toUpperCase()}. Which phase do you blame?`),
+        h('strong', {}, `It went ${A.WINDOW_LABELS[a.window].toUpperCase()}. Which phase do you blame?`),
         h('p', { class: 'field-hint' }, 'Phases that drifted from the plan are listed first.'),
         h('div', { class: 'attribution-options' },
           options.map(o => {
@@ -260,6 +261,9 @@ export function resultScreen(initialState, brewId, actions) {
             attributionButtons.set(o.phase, btn);
             return btn;
           }))) : null,
+
+      ...(adviceCard(state, brew, { includeDrift: true, id: 'advice-reveal' })
+        ? [h('h3', { class: 'section-title' }, 'What to try next'), adviceCard(state, brew, { includeDrift: true, id: 'advice-reveal' })] : []),
 
       h('h3', { class: 'section-title' }, 'Phases & drift'),
       h('table', { class: 'drift', id: 'drift-table' },

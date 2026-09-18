@@ -1,14 +1,15 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=23';
-import * as model from './model.js?v=23';
-import * as R from './recipe.js?v=23';
-import * as T from './timeline.js?v=23';
-import * as C from './coach.js?v=23';
-import * as Bw from './brew.js?v=23';
-import * as As from './assessment.js?v=23';
-import * as Xp from './exportData.js?v=23';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=24';
+import * as model from './model.js?v=24';
+import * as R from './recipe.js?v=24';
+import * as T from './timeline.js?v=24';
+import * as C from './coach.js?v=24';
+import * as Bw from './brew.js?v=24';
+import * as As from './assessment.js?v=24';
+import * as Xp from './exportData.js?v=24';
+import * as Ad from './advice.js?v=24';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -1165,6 +1166,65 @@ export function runTests(log = console) {
     const corrected = Bw.retimeEvent({ timeline: tapped }, 1, 41);
     const after = T.analyzeBrew(yuan, corrected.timeline);
     eq('retime: correcting the press to 0:41 puts the steep back on plan', [after.phases.steep, after.drift.phases.steep.flag], [41, 'on']);
+  }
+
+  // ================= "what to try next" (advice.js) =================
+  {
+    const ids = list => list.map(s => s.id);
+    const ctx = {
+      window: 'over', grind: { setting: 25, unit: 'clicks' }, tempC: 93, doseG: 13, waterPpm: 150,
+      daysOffRoast: 16, hasValve: true, cuttable: true, usesDripAssist: false,
+      drift: { phases: { drawdown: { flag: 'long', deltaS: 12.4, exempt: null }, bloom: { flag: 'short', deltaS: -6, exempt: null } } },
+    };
+    eq('advice: nothing to suggest for a cup that is IN', Ad.suggest({ ...ctx, window: 'in' }), []);
+    eq('advice: nothing without a window', Ad.suggest({ ...ctx, window: null }), []);
+
+    const over = Ad.suggest(ctx);
+    eq('advice: OVER → coarser, cut earlier, cooler, gentler + the one-variable rule',
+      ids(over), ['grind', 'contact', 'temp', 'agitation', 'one-variable']);
+    eq('advice: it uses this brew\'s own numbers', [over[0].text, over[2].text],
+      ['Grind coarser: 25 → 27 clicks.', 'Water cooler: 93 → 91 °C.']);
+    eq('advice: a "slightly" call moves half as far', Ad.suggest({ ...ctx, window: 'slightly-over' })[0].text, 'Grind coarser: 25 → 26 clicks.');
+
+    const under = Ad.suggest({ ...ctx, window: 'under' });
+    eq('advice: UNDER → finer, longer contact, hotter, more agitation',
+      [under[0].text, under[1].text, under[2].text], ['Grind finer: 25 → 23 clicks.', 'Keep the valve closed longer, or open it later.', 'Water hotter: 93 → 95 °C.']);
+    eq('advice: no valve → the suggestion fits the rig', Ad.suggest({ ...ctx, window: 'under', hasValve: false })[1].text, 'Pour the last pour more slowly, or in smaller pulses.');
+    eq('advice: with a drip assist on, the agitation advice flips to it',
+      Ad.suggest({ ...ctx, usesDripAssist: true }).find(s => s.id === 'agitation').text, 'Lower the flow rate, or swirl less.');
+
+    // HONESTY 1: drift only after submit, and only when it pushes the same way as the fault
+    eq('advice: no drift advice while still scoring', ids(over).some(i => i.startsWith('drift-')), false);
+    const revealed = Ad.suggest(ctx, { includeDrift: true });
+    eq('advice: after submit, execution comes first', [revealed[0].kind, revealed[0].text],
+      ['execution', 'Hit the plan first: drawdown ran 12 s long.']);
+    eq('advice: a drift pushing the OTHER way is not offered as the cause (bloom short on an OVER cup)',
+      ids(revealed).includes('drift-bloom'), false);
+    eq('advice: a cut-exempt drift is never blamed',
+      ids(Ad.suggest({ ...ctx, drift: { phases: { drawdown: { flag: 'short', deltaS: -30, exempt: 'cut' } } }, window: 'under' }, { includeDrift: true })).some(i => i.startsWith('drift-')), false);
+
+    // HONESTY 2: one variable, always last
+    eq('advice: every list ends with "change one"', [over[over.length - 1].id, revealed[revealed.length - 1].id], ['one-variable', 'one-variable']);
+    eq('advice: at most 4 suggestions plus the rule', revealed.length <= 5, true);
+
+    // Water rules, from the OMB ladder
+    eq('advice: OVER on high ppm suggests dropping it', Ad.suggest({ window: 'over', waterPpm: 150 }).find(s => s.id === 'water')?.text, 'Drop the water: 150 → 75 ppm.');
+    eq('advice: OVER at 50 ppm does not tell you to drop it further', Ad.suggest({ window: 'over', waterPpm: 50 }).some(s => s.id === 'water'), false);
+    eq('advice: UNDER on soft water suggests more minerals', Ad.suggest({ window: 'under', waterPpm: 50 }).find(s => s.id === 'water')?.text, 'Try 75–100 ppm instead of 50.');
+    eq('advice: very fresh coffee + UNDER suggests rest, not chasing',
+      Ad.suggest({ window: 'under', daysOffRoast: 3 }).some(s => s.id === 'rest'), true);
+    eq('advice: a rested coffee gets no rest suggestion', Ad.suggest({ window: 'under', daysOffRoast: 16 }).some(s => s.id === 'rest'), false);
+
+    // Context read off a brew
+    const brewCtx = Ad.contextFromBrew(
+      { assessment: { window: 'over' }, grind: { setting: 25, unit: 'clicks' }, daysOffRoast: 16, drift: { phases: {} } },
+      { recipe: { plan: [{ action: 'pour', tempC: 93, dripAssist: false }, { action: 'pour', tempC: 88, dripAssist: true }] },
+        rig: { valveCapable: true, cuttable: true }, water: { ppm: 50 } });
+    eq('advice: context uses the hottest planned pour and notices the drip assist',
+      [brewCtx.window, brewCtx.tempC, brewCtx.usesDripAssist, brewCtx.waterPpm, brewCtx.hasValve], ['over', 93, true, 50, true]);
+    eq('advice: a brew with no assessment yields nothing', Ad.suggest(Ad.contextFromBrew({}, {})), []);
+    eq('advice: headline names the direction', [Ad.headline('under'), Ad.headline('slightly-over'), Ad.headline('in')],
+      ['Tasted under: aim for more extraction.', 'Tasted a touch over: aim for less extraction.', null]);
   }
 
   // ---- model ----
