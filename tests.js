@@ -1,14 +1,14 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=22';
-import * as model from './model.js?v=22';
-import * as R from './recipe.js?v=22';
-import * as T from './timeline.js?v=22';
-import * as C from './coach.js?v=22';
-import * as Bw from './brew.js?v=22';
-import * as As from './assessment.js?v=22';
-import * as Xp from './exportData.js?v=22';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=23';
+import * as model from './model.js?v=23';
+import * as R from './recipe.js?v=23';
+import * as T from './timeline.js?v=23';
+import * as C from './coach.js?v=23';
+import * as Bw from './brew.js?v=23';
+import * as As from './assessment.js?v=23';
+import * as Xp from './exportData.js?v=23';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -1130,6 +1130,41 @@ export function runTests(log = console) {
     ]);
     eq('cut: a phase that ran LONG before the cut is still flagged', cutLate.drift.phases.drawdown.flag, 'long');
     eq('cut: phases completed before the cut are still judged normally', cutLate.drift.phases.steep.flag, 'on');
+  }
+
+  // ================= correcting a tap time after the brew (brew.js) =================
+  {
+    const base = { doseG: 15, outputMl: 200, timeline: [
+      { type: 'pour', atS: 0, volumeMl: 60, tap: 1 },
+      { type: 'pour-done', atS: 12, tap: 2 },
+      { type: 'pour', atS: 45, volumeMl: 150, tap: 3 },
+      { type: 'drawdown-complete', atS: 150, tap: 4 }] };
+    const fixed = Bw.retimeEvent(base, 2, 40);
+    eq('retime: the time changes and the tap you actually made is kept', [fixed.timeline[2].atS, fixed.timeline[2].tappedAtS, fixed.timeline[2].timeEdited], [40, 45, true]);
+    eq('retime: nothing else moves', fixed.timeline.map(e => e.atS), [0, 12, 40, 150]);
+    eq('retime: pure — the original brew is untouched', base.timeline[2].atS, 45);
+    eq('retime: correcting twice still remembers the real tap', Bw.retimeEvent(fixed, 2, 42).timeline[2].tappedAtS, 45);
+    eq('retime: back to the tapped time clears the correction', ['tappedAtS', 'timeEdited'].map(k => k in Bw.retimeEvent(fixed, 2, 45).timeline[2]), [false, false]);
+    eq('retime: refuses a negative time, an unreadable one, or a row that does not exist',
+      [Bw.retimeEvent(base, 2, -1), Bw.retimeEvent(base, 2, NaN), Bw.retimeEvent(base, 9, 10)].map(x => x === base), [true, true, true]);
+    eq('retime: the list of corrections, for the record', Bw.timeEdits(fixed), [{ type: 'pour', tappedAtS: 45, atS: 40, deltaS: -5 }]);
+    eq('retime: no corrections on an untouched brew', Bw.timeEdits(base), []);
+    eq('retime: a correction past the end of the brew is flagged, not silently accepted',
+      Bw.reconcileIssues(Bw.retimeEvent(base, 2, 200)), ['Pour 2 is after the brew ended (150 s)']);
+    eq('retime: a valid correction leaves no issues', Bw.reconcileIssues(fixed), []);
+
+    // The point of it: the phases follow the corrected time
+    const yuan = yuanRecipe();
+    const tapped = [
+      { type: 'pour', atS: 0, volumeMl: 50, valve: 'closed', tap: 1 },
+      { type: 'valve', atS: 55, state: 'open', trigger: 'planned', tap: 2 },   // pressed 15 s late
+      { type: 'pour', atS: 60, volumeMl: 100, tap: 3 },
+      { type: 'drawdown-complete', atS: 150, tap: 4 }];
+    const late = T.analyzeBrew(yuan, tapped);
+    eq('retime: the late press reads as a long steep', [late.phases.steep, late.drift.phases.steep.flag], [55, 'long']);
+    const corrected = Bw.retimeEvent({ timeline: tapped }, 1, 41);
+    const after = T.analyzeBrew(yuan, corrected.timeline);
+    eq('retime: correcting the press to 0:41 puts the steep back on plan', [after.phases.steep, after.drift.phases.steep.flag], [41, 'on']);
   }
 
   // ---- model ----

@@ -3,9 +3,9 @@
 // timing, no diff, nothing from any other brew. It reads only this brew's own assessment.
 // Answers save as you tap; the cooled reminder buzzes when it's time to taste again.
 
-import { h, toNum } from './dom.js?v=22';
-import * as model from './model.js?v=22';
-import * as A from './assessment.js?v=22';
+import { h, toNum } from './dom.js?v=23';
+import * as model from './model.js?v=23';
+import * as A from './assessment.js?v=23';
 
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 

@@ -181,6 +181,7 @@ export function outcomes(brew) {
   return { waterInMl: inMl, retentionMl, retentionPct, trueRatio };
 }
 const round1 = n => Math.round(n * 10) / 10;
+const round2 = n => Math.round(n * 100) / 100;
 
 // Post-brew reconciliation of one pour: set its actual volume / temp. Times never change,
 // they came from the taps. `pourIndex` counts pours in the timeline, from 0.
@@ -208,6 +209,28 @@ export function setCutReason(brew, { choice = null, note = null } = {}) {
   } };
 }
 
+// Correcting a tap time. Taps are made with hands busy, so a late or early press happens;
+// without this the mistake is permanent and every phase after it is wrong.
+// The FIRST value stays in `tappedAtS` — the record keeps what you actually pressed, and the
+// correction sits beside it. A time back at its original value clears the correction.
+// `index` counts every timeline event, in stored order.
+export function retimeEvent(brew, index, atS) {
+  const timeline = brew?.timeline ?? [];
+  const e = timeline[index];
+  if (!e || !isNum(atS) || atS < 0) return brew;
+  const tappedAtS = e.tappedAtS ?? e.atS;
+  const next = { ...e, atS: round2(atS) };
+  if (Math.abs(round2(atS) - tappedAtS) < 0.005) { delete next.tappedAtS; delete next.timeEdited; }
+  else { next.tappedAtS = tappedAtS; next.timeEdited = true; }
+  return { ...brew, timeline: timeline.map((x, i) => (i === index ? next : x)) };
+}
+
+// Every correction made, for the record and the export.
+export function timeEdits(brew) {
+  return (brew?.timeline ?? []).filter(e => e?.timeEdited)
+    .map(e => ({ type: e.type, tappedAtS: e.tappedAtS, atS: e.atS, deltaS: round2(e.atS - e.tappedAtS) }));
+}
+
 // Set a measured field (output, bypass, serve temp, notes) and recompute.
 export const MEASURED_FIELDS = ['outputMl', 'bypassG', 'serveTempC', 'notes'];
 export function setMeasured(brew, key, value) {
@@ -231,5 +254,17 @@ export function reconcileIssues(brew) {
   });
   if (!(isNum(brew?.outputMl) && brew.outputMl > 0)) issues.push('Output not entered');
   if (brew?.bypassG != null && !(isNum(brew.bypassG) && brew.bypassG >= 0)) issues.push('Bypass must be 0 or more');
+  // Times: a correction that lands outside the brew would silently break every phase after it.
+  const endEvent = (brew?.timeline ?? []).find(e => e?.type === 'cut' || e?.type === 'drawdown-complete');
+  if (endEvent) {
+    let n = 0;
+    for (const e of brew.timeline) {
+      if (e === endEvent) continue;
+      if (e?.type === 'pour') n += 1;
+      if (isNum(e?.atS) && e.atS > endEvent.atS) {
+        issues.push(`${e.type === 'pour' ? `Pour ${n}` : e.type} is after the brew ended (${endEvent.atS.toFixed(0)} s)`);
+      }
+    }
+  }
   return issues;
 }

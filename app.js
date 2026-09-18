@@ -3,15 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=22';
-import * as model from './model.js?v=22';
-import * as recipeLib from './recipe.js?v=22';
-import * as coachLib from './coach.js?v=22';
-import * as timelineLib from './timeline.js?v=22';
-import * as brewLib from './brew.js?v=22';
-import * as assessLib from './assessment.js?v=22';
-import { daysOffRoast } from './compute.js?v=22';
-import { createUI } from './ui.js?v=22';
+import * as store from './store.js?v=23';
+import * as model from './model.js?v=23';
+import * as recipeLib from './recipe.js?v=23';
+import * as coachLib from './coach.js?v=23';
+import * as timelineLib from './timeline.js?v=23';
+import * as brewLib from './brew.js?v=23';
+import * as assessLib from './assessment.js?v=23';
+import { daysOffRoast } from './compute.js?v=23';
+import { createUI } from './ui.js?v=23';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -318,6 +318,27 @@ export const actions = {
 
   // ---- after the brew: reconciliation ----
   // fn: brew → new brew (pure, from brew.js). Times are never edited here.
+  // A time correction changes the phases, the drift and the per-step timing, so everything
+  // derived is rebuilt from the corrected timeline — never patched by hand.
+  retimeBrewEvent(brewId, index, atS) {
+    return actions.editBrew(brewId, b => {
+      const next = brewLib.retimeEvent(b, index, atS);
+      if (next === b) return b;
+      const recipe = state.recipes[next.recipeId] ?? null;
+      const analysis = timelineLib.analyzeBrew(recipe, next.timeline);
+      const sched = recipe ? coachLib.schedule(recipe, { rig: state.rigs[recipe.rigId] }) : null;
+      return brewLib.withOutcomes({
+        ...next,
+        endedBy: analysis.endedBy,
+        phases: analysis.phases,
+        plannedPhases: analysis.plannedPhases,
+        drift: analysis.drift,
+        pourDoneUsed: analysis.pourDoneUsed,
+        tapDrift: sched ? coachLib.tapDrift(sched, next.timeline) : next.tapDrift,
+      });
+    });
+  },
+
   editBrew(brewId, fn) {
     for (const session of Object.values(state.sessions)) {
       const i = (session.brews ?? []).findIndex(b => b.id === brewId);
@@ -523,7 +544,7 @@ async function boot() {
   }
 
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=22').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
+    import('./tests.js?v=23').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
   }
 }
 

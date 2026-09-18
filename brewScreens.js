@@ -3,11 +3,12 @@
 // renders them and calls actions. Inputs are built once and refreshed in place, so typing
 // never rebuilds the form (the phone keyboard stays up).
 
-import { h, row, fmt, toNum } from './dom.js?v=22';
-import * as model from './model.js?v=22';
-import * as B from './brew.js?v=22';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=22';
-import * as A from './assessment.js?v=22';
+import { h, row, fmt, toNum } from './dom.js?v=23';
+import * as recipeLib from './recipe.js?v=23';
+import * as model from './model.js?v=23';
+import * as B from './brew.js?v=23';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=23';
+import * as A from './assessment.js?v=23';
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '—';
@@ -271,14 +272,42 @@ export function resultScreen(initialState, brewId, actions) {
       h('p', { class: 'field-hint' }, 'Tolerance ±5 s per phase, ±10 s drawdown and total. A cut is never a short drawdown; a live lock is never judged.'));
   }
 
-  const pours = brew.timeline.filter(e => e.type === 'pour');
-  const pourRows = pours.map((e, i) => h('div', { class: 'reconcile-pour', 'data-pour': i },
-    h('span', { class: 'reconcile-time' }, clock(e.atS)),
-    h('span', { class: 'reconcile-name' }, `Pour ${i + 1}`),
-    h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, 'ml'),
-      num(`r-pour-${i}-volumeMl`, e.volumeMl, v => edit(b => B.reconcilePour(b, i, 'volumeMl', v)))),
-    h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, '°C'),
-      num(`r-pour-${i}-tempC`, e.tempC, v => edit(b => B.reconcilePour(b, i, 'tempC', v))))));
+  // One row per tap, in the order they happened. Every TIME is editable: a mis-timed press is
+  // a mistake you can only see afterwards, and everything derived is recomputed from the fix.
+  const EVENT_NAMES = { pour: 'Pour', 'pour-done': 'Pour done', valve: 'Valve', swirl: 'Swirl', cut: 'Cut', 'drawdown-complete': 'Drawdown done' };
+  const editedFlags = new Map();
+  let pourN = 0;
+  const pourRows = brew.timeline.map((e, i) => {
+    const isPour = e.type === 'pour';
+    if (isPour) pourN += 1;
+    const pourIndex = pourN - 1;
+    const name = e.type === 'valve' ? (e.state === 'open' ? 'Valve open' : 'Valve closed')
+      : isPour ? `Pour ${pourN}` : EVENT_NAMES[e.type] ?? e.type;
+    const flag = h('span', { class: 'time-edited', id: `r-tap-${i}-edited`, hidden: true });
+    editedFlags.set(i, flag);
+    // Digits on the number pad: 130 = 1:30 (same entry as the recipe builder).
+    const timeInput = h('input', {
+      id: `r-tap-${i}-atS`, type: 'text', inputMode: 'numeric', pattern: '[0-9]*', class: 'clock reconcile-time-input',
+      autocomplete: 'off', value: recipeLib.formatClock(e.atS),
+      onfocus: ev => { const s = recipeLib.parseClock(ev.target.value); if (s !== null) ev.target.value = recipeLib.clockDigits(s); },
+      oninput: ev => {
+        const raw = ev.target.value;
+        const s = recipeLib.parseClock(raw);
+        const bad = raw.trim() !== '' && s === null;
+        ev.target.classList.toggle('invalid', bad);
+        if (s !== null) actions.retimeBrewEvent(brewId, i, s);
+      },
+      onchange: ev => { const s = recipeLib.parseClock(ev.target.value); if (s !== null) ev.target.value = recipeLib.formatClock(s); },
+    });
+    return h('div', { class: 'reconcile-pour', 'data-tap': i, 'data-type': e.type },
+      h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, 'at'), timeInput),
+      h('span', { class: 'reconcile-name' }, name, flag),
+      isPour ? h('div', { class: 'reconcile-fields' },
+        h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, 'ml'),
+          num(`r-pour-${pourIndex}-volumeMl`, e.volumeMl, v => edit(b => B.reconcilePour(b, pourIndex, 'volumeMl', v)))),
+        h('label', { class: 'mini-field' }, h('span', { class: 'mini-label' }, '°C'),
+          num(`r-pour-${pourIndex}-tempC`, e.tempC, v => edit(b => B.reconcilePour(b, pourIndex, 'tempC', v))))) : null);
+  });
 
   const waterInEl = h('span', { class: 'derived-value', id: 'r-water-in' });
   const retentionEl = h('span', { class: 'derived-value', id: 'r-retention' });
@@ -319,7 +348,7 @@ export function resultScreen(initialState, brewId, actions) {
     ] : []),
 
     h('h3', { class: 'section-title' }, 'What actually went in'),
-    h('p', { class: 'field-hint' }, 'Prefilled from the plan. Correct any pour that differed. Times come from your taps and can’t be edited.'),
+    h('p', { class: 'field-hint' }, 'Prefilled from your taps and the plan. Correct anything that differed — a late press, a volume, a temperature. Phases and drift are recomputed, and the time you actually pressed is kept underneath.'),
     h('div', { class: 'reconcile', id: 'reconcile-pours' }, pourRows),
     h('form', { class: 'form', onsubmit: ev => ev.preventDefault() },
       h('div', { class: 'field-pair' },
@@ -358,6 +387,12 @@ export function resultScreen(initialState, brewId, actions) {
     retentionPctEl.textContent = o.retentionPct === B.UNKNOWN ? UNKNOWN : `${o.retentionPct}%`;
     for (const [phase, btn] of attributionButtons) btn.setAttribute('aria-pressed', String((b.assessment?.attributedPhase ?? null) === phase));
     for (const [reason, btn] of cutReasonButtons) btn.setAttribute('aria-pressed', String((b.cutReason?.choice ?? null) === reason));
+    (b.timeline ?? []).forEach((e, i) => {
+      const flag = editedFlags.get(i);
+      if (!flag) return;
+      flag.hidden = !e.timeEdited;
+      flag.textContent = e.timeEdited ? ` · tapped ${clock(e.tappedAtS)}` : '';
+    });
     ratioEl.textContent = o.trueRatio === B.UNKNOWN ? UNKNOWN : `1:${o.trueRatio.toFixed(1)}`;
     const issues = B.reconcileIssues(b);
     issuesEl.replaceChildren(issues.length
