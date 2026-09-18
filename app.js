@@ -3,15 +3,15 @@
 // applies, re-renders, and schedules a debounced save. Handlers never say
 // what changed — save() works it out by diffing against the last write.
 
-import * as store from './store.js?v=21';
-import * as model from './model.js?v=21';
-import * as recipeLib from './recipe.js?v=21';
-import * as coachLib from './coach.js?v=21';
-import * as timelineLib from './timeline.js?v=21';
-import * as brewLib from './brew.js?v=21';
-import * as assessLib from './assessment.js?v=21';
-import { daysOffRoast } from './compute.js?v=21';
-import { createUI } from './ui.js?v=21';
+import * as store from './store.js?v=22';
+import * as model from './model.js?v=22';
+import * as recipeLib from './recipe.js?v=22';
+import * as coachLib from './coach.js?v=22';
+import * as timelineLib from './timeline.js?v=22';
+import * as brewLib from './brew.js?v=22';
+import * as assessLib from './assessment.js?v=22';
+import { daysOffRoast } from './compute.js?v=22';
+import { createUI } from './ui.js?v=22';
 
 const SAVE_DEBOUNCE_MS = 400;
 const STATE_KEY = 'state';
@@ -335,6 +335,25 @@ export const actions = {
   },
   schema: SCHEMA,
 
+  // A brew can be deleted: test runs and aborted brews shouldn't count as practice.
+  // An emptied session goes with it, and the recipe unfreezes if nothing else used it.
+  deleteBrew(brewId) {
+    for (const session of Object.values(state.sessions)) {
+      const brew = (session.brews ?? []).find(b => b.id === brewId);
+      if (!brew) continue;
+      const recipeId = brew.recipeId;
+      mutate(s => {
+        const sess = s.sessions[session.id];
+        sess.brews = sess.brews.filter(b => b.id !== brewId);
+        if (sess.brews.length === 0) delete s.sessions[session.id];
+      });
+      flush();
+      navigate(recipeId && state.recipes[recipeId] ? `#/recipes/${encodeURIComponent(recipeId)}` : '#/recipes');
+      return true;
+    }
+    return false;
+  },
+
   // ---- assessment (Step 9) ----
   // Saved as you tap. A brew's assessment starts EMPTY — never copied from another brew.
   setAssessment(brewId, path, value) {
@@ -504,7 +523,7 @@ async function boot() {
   }
 
   if (location.hostname === 'localhost' || params.has('test')) {
-    import('./tests.js?v=21').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
+    import('./tests.js?v=22').then(m => m.runTests()).catch(err => console.warn('[tests] not loaded:', err?.message ?? err));
   }
 }
 

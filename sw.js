@@ -8,7 +8,7 @@
 //                      when online, and airplane mode still opens the app
 //   everything else    cache first — asset URLs carry ?v=, so a cached copy is never stale
 
-const VERSION = '?v=21';
+const VERSION = '?v=22';
 const CACHE = `project-b${VERSION}`;
 
 const MODULES = [

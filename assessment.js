@@ -17,7 +17,22 @@ export const CATEGORIES = Object.freeze([
   { key: 'balance', label: 'Balance / Aftertaste' },
 ]);
 export const ANSWERS = Object.freeze(['yes', 'no', 'unsure']);
-export const WINDOWS = Object.freeze(['under', 'in', 'over']);
+// Five points, so a cup that leans without failing has a home. The three original values are
+// still valid, so brews scored before this keep their meaning.
+export const WINDOWS = Object.freeze(['under', 'slightly-under', 'in', 'slightly-over', 'over']);
+export const WINDOW_LABELS = Object.freeze({
+  'under': 'UNDER · sour, hollow',
+  'slightly-under': 'slightly under',
+  'in': 'IN · sweet, clean',
+  'slightly-over': 'slightly over',
+  'over': 'OVER · drying, bitter',
+});
+// Which way the next brew should move. 'in' → null.
+export function direction(window) {
+  if (window === 'under' || window === 'slightly-under') return 'more extraction';
+  if (window === 'over' || window === 'slightly-over') return 'less extraction';
+  return null;
+}
 export const TEMPS = Object.freeze(['hot', 'cooled']);
 export const QUALITY_MIN = 1;
 export const QUALITY_MAX = 10;
@@ -121,7 +136,7 @@ export function submitIssues(assessment) {
       if (!ANSWERS.includes(a.cooled?.[key])) issues.push(`Cooled: ${label} (or mark "didn't taste it cooled")`);
     }
   }
-  if (!WINDOWS.includes(a.window)) issues.push('Window: under, in or over');
+  if (!WINDOWS.includes(a.window)) issues.push('Window: under → over');
   return issues;
 }
 
@@ -143,8 +158,8 @@ export function revealed(brew) {
 // → [] when the window is "in" (nothing to attribute) or not revealed yet.
 export function attributionOptions(brew) {
   if (!revealed(brew)) return [];
-  const w = brew.assessment.window;
-  if (w !== 'under' && w !== 'over') return [];
+  // Anything off-centre can be attributed to a phase, including the "slightly" calls.
+  if (direction(brew.assessment.window) === null) return [];
   const order = ['bloom', 'steep', 'percolation', 'lock', 'drawdown'];
   const phases = brew.phases ?? {};
   const drift = brew.drift?.phases ?? {};

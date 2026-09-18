@@ -3,11 +3,11 @@
 // renders them and calls actions. Inputs are built once and refreshed in place, so typing
 // never rebuilds the form (the phone keyboard stays up).
 
-import { h, row, fmt, toNum } from './dom.js?v=21';
-import * as model from './model.js?v=21';
-import * as B from './brew.js?v=21';
-import { daysOffRoast, UNKNOWN } from './compute.js?v=21';
-import * as A from './assessment.js?v=21';
+import { h, row, fmt, toNum } from './dom.js?v=22';
+import * as model from './model.js?v=22';
+import * as B from './brew.js?v=22';
+import { daysOffRoast, UNKNOWN } from './compute.js?v=22';
+import * as A from './assessment.js?v=22';
 
 const clock = t => {
   if (t == null || !Number.isFinite(t)) return '—';
@@ -215,6 +215,7 @@ export function resultScreen(initialState, brewId, actions) {
   const isRevealed = A.revealed(brew);
   const started = Boolean(brew.assessment) && A.tally(brew.assessment).answered > 0;
   const attributionButtons = new Map();
+  const cutReasonButtons = new Map();
 
   // ---- after submit: scores, then the evidence ----
   function revealSection() {
@@ -239,7 +240,8 @@ export function resultScreen(initialState, brewId, actions) {
         h('tbody', {}, A.CATEGORIES.map(c => h('tr', { class: t.categories[c.key] ? 'at-risk' : '' },
           h('th', {}, c.label), cell(a.hot?.[c.key]), a.cooledSkipped ? h('td', { class: 'ans' }, 'not tasted') : cell(a.cooled?.[c.key]))))),
       h('div', { class: 'derived' },
-        row('Window', h('span', { id: 'reveal-window' }, (a.window ?? '—').toUpperCase())),
+        row('Window', h('span', { id: 'reveal-window' }, a.window ? A.WINDOW_LABELS[a.window].split(' · ')[0].toUpperCase() : '—')),
+        A.direction(a.window) ? row('Next brew', `needs ${A.direction(a.window)}`) : null,
         row('One flaw', a.oneFlaw || '—'),
         a.descriptors ? row('Descriptors', a.descriptors) : null,
         a.cooledAtTempC != null ? row('Cooled at', `${a.cooledAtTempC} °C`) : null,
@@ -247,7 +249,7 @@ export function resultScreen(initialState, brewId, actions) {
       h('a', { class: 'btn btn-small', id: 'assess-edit', href: `#/assess/${encodeURIComponent(brewId)}` }, 'Change scores'),
 
       options.length ? h('div', { class: 'attribution', id: 'attribution' },
-        h('strong', {}, `It went ${a.window.toUpperCase()}. Which phase do you blame?`),
+        h('strong', {}, `It went ${A.WINDOW_LABELS[a.window].split(' · ')[0].toUpperCase()}. Which phase do you blame?`),
         h('p', { class: 'field-hint' }, 'Phases that drifted from the plan are listed first.'),
         h('div', { class: 'attribution-options' },
           options.map(o => {
@@ -302,6 +304,20 @@ export function resultScreen(initialState, brewId, actions) {
         started ? '☕ Continue scoring' : '☕ Taste & score'),
     ]),
 
+    // A cut is a decision (spec §5.1.1). Asked here, after the brew — never mid-pour.
+    ...(brew.endedBy === 'cut' ? [
+      h('h3', { class: 'section-title' }, 'Why did you cut?'),
+      h('div', { class: 'cut-reason', id: 'cut-reason' },
+        h('div', { class: 'attribution-options' }, B.CUT_REASONS.map(r => {
+          const btn = h('button', { type: 'button', class: 'btn cut-reason-btn', 'data-reason': r,
+            onclick: () => edit(b => B.setCutReason(b, { choice: (b.cutReason?.choice ?? null) === r ? null : r })) }, r);
+          cutReasonButtons.set(r, btn);
+          return btn;
+        })),
+        h('input', { type: 'text', id: 'cut-reason-note', autocomplete: 'off', placeholder: 'What happened? (optional)',
+          value: brew.cutReason?.note ?? '', oninput: ev => edit(b => B.setCutReason(b, { note: ev.target.value })) })),
+    ] : []),
+
     h('h3', { class: 'section-title' }, 'What actually went in'),
     h('p', { class: 'field-hint' }, 'Prefilled from the plan. Correct any pour that differed. Times come from your taps and can’t be edited.'),
     h('div', { class: 'reconcile', id: 'reconcile-pours' }, pourRows),
@@ -326,7 +342,11 @@ export function resultScreen(initialState, brewId, actions) {
       h('span', {}, d.label),
       // Per-step timing is drift too: only after the assessment.
       isRevealed ? h('span', { class: 'coach-delta' }, `${signed(d.deltaS)} s`) : null))),
-    recipe ? h('button', { type: 'button', class: 'btn btn-primary', id: 'brew-again', onclick: () => actions.newBrew(recipe.id, { fresh: true }) }, 'Brew again') : null);
+    recipe ? h('button', { type: 'button', class: 'btn btn-primary', id: 'brew-again', onclick: () => actions.newBrew(recipe.id, { fresh: true }) }, 'Brew again') : null,
+    // A test run or an aborted brew shouldn't count as practice.
+    h('button', { type: 'button', class: 'btn btn-danger', id: 'delete-brew', onclick: () => {
+      if (confirm('Delete this brew? Its taps, numbers and scores go with it. This cannot be undone.')) actions.deleteBrew(brewId);
+    } }, 'Delete this brew'));
 
   function refresh(next) {
     state = next;
@@ -337,6 +357,7 @@ export function resultScreen(initialState, brewId, actions) {
     retentionEl.textContent = o.retentionMl === B.UNKNOWN ? UNKNOWN : `${fmt(o.retentionMl)} ml`;
     retentionPctEl.textContent = o.retentionPct === B.UNKNOWN ? UNKNOWN : `${o.retentionPct}%`;
     for (const [phase, btn] of attributionButtons) btn.setAttribute('aria-pressed', String((b.assessment?.attributedPhase ?? null) === phase));
+    for (const [reason, btn] of cutReasonButtons) btn.setAttribute('aria-pressed', String((b.cutReason?.choice ?? null) === reason));
     ratioEl.textContent = o.trueRatio === B.UNKNOWN ? UNKNOWN : `1:${o.trueRatio.toFixed(1)}`;
     const issues = B.reconcileIssues(b);
     issuesEl.replaceChildren(issues.length

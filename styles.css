@@ -438,3 +438,6 @@ td.flag-cut, td.flag-live { color: var(--muted); }
 
 /* ---------- data (Step 10) ---------- */
 .tabs .tab { min-width: 0; padding-left: 4px; padding-right: 4px; font-size: .9375rem; }
+
+.cut-reason { display: flex; flex-direction: column; gap: 8px; }
+.cut-reason-btn[aria-pressed="true"] { background: var(--danger); color: var(--danger-fg); border-color: var(--danger); }

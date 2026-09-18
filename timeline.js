@@ -193,8 +193,10 @@ export function planToTimeline(recipe) {
 // Actual minus planned, per phase and in total, flagged short / on / long.
 //   - A phase missing on one side counts as 0 there; unknown (null) is never judged.
 //   - lock is never judged: it is a live decision, not something the plan could get wrong.
-//   - A CUT brew is exempt from SHORT drawdown and SHORT total: ending early was the decision.
-//     A long drawdown before the cut is still flagged.
+//   - A CUT brew is exempt from SHORT on: the drawdown, the total, the phase the cut interrupted,
+//     and any phase the cut prevented from happening at all. Ending early was the decision, so
+//     phases that never ran are not execution errors. A phase that ran LONG before the cut is
+//     still flagged.
 // → { phases: { [phase]: { planS, actualS, deltaS, flag, exempt } }, total: {…} }
 //   flag: 'short' | 'on' | 'long' | null      exempt: 'cut' | 'live' | null
 export function phaseDrift(planned, actual, tolerance = {}) {
@@ -206,9 +208,12 @@ export function phaseDrift(planned, actual, tolerance = {}) {
     if (!inPlan && !inActual) continue;
     const planS = planned ? (inPlan ? planned.phases[phase] : 0) : null;
     const actualS = actual ? (inActual ? actual.phases[phase] : 0) : null;
+    const wasCut = actual?.endedBy === 'cut';
+    // The phase the cut landed in is the last one that ran.
+    const cutPhase = wasCut ? actual.segments?.[actual.segments.length - 1]?.phase ?? null : null;
     phases[phase] = judge(planS, actualS, phase === 'drawdown' ? tol.drawdownS : tol.phaseS, {
       live: phase === 'lock',
-      cut: phase === 'drawdown' && actual?.endedBy === 'cut',
+      cut: wasCut && (phase === 'drawdown' || phase === cutPhase || !inActual || actualS === 0),
     });
   }
   const total = judge(planned?.totalS ?? null, actual?.totalS ?? null, tol.totalS, { cut: actual?.endedBy === 'cut' });

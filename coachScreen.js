@@ -2,10 +2,10 @@
 // colour, screen wake lock. All timing decisions come from pure coach.js; this file only
 // follows them. Taps go through actions (→ mutate → saved), never straight to storage.
 
-import { h } from './dom.js?v=21';
-import * as model from './model.js?v=21';
-import * as recipeLib from './recipe.js?v=21';
-import * as C from './coach.js?v=21';
+import { h } from './dom.js?v=22';
+import * as model from './model.js?v=22';
+import * as recipeLib from './recipe.js?v=22';
+import * as C from './coach.js?v=22';
 
 // Dev only: ?coachspeed=20 runs brew time 20× faster, for automated checks.
 const SPEED = (() => {
@@ -136,6 +136,10 @@ export function coachScreen(initialState, recipe, actions) {
         tile('Grind', d.grind?.setting != null ? `${d.grind.setting}${d.grind.unit ? ` ${d.grind.unit}` : ''}` : '—'),
         tile('Dose', d.doseG != null ? `${d.doseG} g` : '—'),
         tile('Water', name('waters', d.waterId))),
+      // The paper in your hand is as easy to get wrong as the grind: check it before you tap.
+      h('div', { class: 'tile-row' },
+        tile('Dripper', rig?.dripper || '—'),
+        tile('Filter', rig?.filter ? `${rig.filter}${rig.filterBatch ? ` · ${rig.filterBatch}` : ''}` : '—')),
       h('a', { class: 'btn btn-small', href, id: 'coach-setup-edit' }, 'Change setup'));
   }
 

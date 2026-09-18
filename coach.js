@@ -14,8 +14,11 @@
 
 export const DEFAULT_CUE_LEAD_S = 3;
 export const MIN_CUE_S = 1;
-// A prep reminder (put on / remove drip assist, tare) comes this long before the pour.
+// A prep reminder comes this long before the pour. Fitting a drip assist takes longer than a
+// tare — measured: drip-assist pours ran 3.5–10.3 s late on a 10 s warning, tare-only pours didn't.
 export const PREP_LEAD_S = 10;
+export const DRIP_ASSIST_PREP_LEAD_S = 20;
+export const prepLeadS = items => (items.some(i => i.includes('DRIP ASSIST')) ? DRIP_ASSIST_PREP_LEAD_S : PREP_LEAD_S);
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const EPS = 1e-9;
@@ -107,7 +110,7 @@ export function schedule(recipe, { rig = null, cueLeadS } = {}) {
     // No room for its own buzz before the countdown → it is shown on screen, not buzzed.
     const items = [...new Set(g.actions.flatMap(a => a.prep ?? []))];
     if (items.length) {
-      const wanted = g.atS - PREP_LEAD_S;
+      const wanted = g.atS - prepLeadS(items);
       const earliest = Number.isFinite(prevFireS) ? prevFireS + MIN_CUE_S : -Infinity;
       const at = Math.min(Math.max(wanted, earliest), cueAtS);
       const buzz = at <= cueAtS - MIN_CUE_S + EPS && at > prevFireS + EPS;

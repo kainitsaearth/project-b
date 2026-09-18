@@ -1,14 +1,14 @@
 // tests.js — console assertions. Runs on load on localhost or with ?test,
 // and directly under Node:  node tests.js
 
-import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=21';
-import * as model from './model.js?v=21';
-import * as R from './recipe.js?v=21';
-import * as T from './timeline.js?v=21';
-import * as C from './coach.js?v=21';
-import * as Bw from './brew.js?v=21';
-import * as As from './assessment.js?v=21';
-import * as Xp from './exportData.js?v=21';
+import { daysOffRoast, totalWaterIn, retention, trueRatio, diff, DIFF_IGNORE, UNKNOWN } from './compute.js?v=22';
+import * as model from './model.js?v=22';
+import * as R from './recipe.js?v=22';
+import * as T from './timeline.js?v=22';
+import * as C from './coach.js?v=22';
+import * as Bw from './brew.js?v=22';
+import * as As from './assessment.js?v=22';
+import * as Xp from './exportData.js?v=22';
 
 // Plan Step 4's test recipe: 50 g closed -> open at 0:40 -> 100 g -> 60 g @ 84 C -> swirl x1 -> cut.
 // Times and dose from (C) Yuan's Simmer Technique (17 g, 210 g total).
@@ -883,16 +883,18 @@ export function runTests(log = console) {
 
     const s = C.schedule(r, { rig: v60Rig() });
     const preps = s.events.filter(e => e.kind === 'prep');
-    eq('reminder: 10 s before the pour, buzzing on its own', preps.slice(0, 2).map(p => [p.atS, p.fireAtS, p.buzz, p.label]),
-      [[35, 45, true, 'PUT ON DRIP ASSIST · TARE SCALE'], [110, 120, true, 'REMOVE DRIP ASSIST · TARE SCALE']]);
+    eq('reminder: 20 s before a DRIP ASSIST pour (fitting one takes longer than a tare)', preps.slice(0, 2).map(p => [p.atS, p.fireAtS, p.buzz, p.label]),
+      [[25, 45, true, 'PUT ON DRIP ASSIST · TARE SCALE'], [100, 120, true, 'REMOVE DRIP ASSIST · TARE SCALE']]);
+    eq('reminder: a tare-only pour keeps the 10 s lead', C.prepLeadS(['TARE SCALE']), 10);
+    eq('reminder: drip assist gets 20 s', [C.prepLeadS(['PUT ON DRIP ASSIST']), C.prepLeadS(['REMOVE DRIP ASSIST', 'TARE SCALE'])], [20, 20]);
     eq('reminder: 5 s after the previous pour it squeezes in 1 s after that pour, 1 s before the countdown', [preps[2].buzz, preps[2].atS, preps[2].fireAtS], [true, 121, 125]);
     const tight = C.schedule(R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [
       { id: 'a', action: 'pour', atS: 0, volumeMl: 50 }, { id: 'b', action: 'pour', atS: 2, volumeMl: 50, tareBefore: true }] })), { rig: v60Rig() });
     const tp = tight.events.find(e => e.kind === 'prep');
     eq('reminder: pours 2 s apart → no room to buzz, shown from the previous pour', [tp.buzz, tp.atS, C.buzzesBetween(tight, -20, 5).filter(b => b.type === 'prep').length], [false, 0, 0]);
     eq('reminder: buzzes in order, a prep never lands on a tick or a fire',
-      C.buzzesBetween(s, 30, 46).map(b => `${b.type}@${b.atS}`), ['prep@35', 'tick@42', 'tick@43', 'tick@44', 'fire@45']);
-    eq('reminder: the screen shows it from the reminder until the pour', [34, 35, 44.9, 45].map(t => C.stateAt(s, t).prep?.label ?? null),
+      C.buzzesBetween(s, 20, 46).map(b => `${b.type}@${b.atS}`), ['prep@25', 'tick@42', 'tick@43', 'tick@44', 'fire@45']);
+    eq('reminder: the screen shows it from the reminder until the pour', [24, 25, 44.9, 45].map(t => C.stateAt(s, t).prep?.label ?? null),
       [null, 'PUT ON DRIP ASSIST · TARE SCALE', 'PUT ON DRIP ASSIST · TARE SCALE', null]);
     eq('reminder: never buzzes before the previous step has fired', preps.every(p => !p.buzz || p.atS > 0), true);
     const first = C.schedule(R.normalizeRecipe(model.createRecipe({ rigId: 'r', plan: [{ id: 'a', action: 'pour', atS: 0, volumeMl: 50, tareBefore: true }] })), { rig: v60Rig() });
@@ -936,7 +938,7 @@ export function runTests(log = console) {
     eq('warning: two changes → none', Bw.attributionWarning(Bw.variableDiff(last, { ...grindOnly, doseG: 18 })), null);
 
     eq('diff: empty = empty (null, undefined, blank text)', Bw.variableDiff({ bypassG: null, grind: { unit: '' } }, { grind: {} }), []);
-    eq('diff: 0 is a value, so 0 → 20 g bypass is a change', Bw.variableDiff({ bypassG: 0 }, { bypassG: 20 }).map(c => c.field), ['bypassG']);
+    eq('diff: 0 is a value, so 0 → 20 g bypass is a change', Bw.variableDiff({ grind: {}, bypassG: 0 }, { bypassG: 20 }).map(c => c.field), ['bypassG']);
     eq('diff: a new recipe version counts as one change', Bw.variableDiff(last, { ...d, recipeId: 'recipe-yuan-v2' }).map(c => c.field), ['recipeId']);
     eq('diff: outcomes, timeline and notes never count', Bw.variableDiff(last, { ...last, outputMl: 1, timeline: [], notes: 'x', assessment: {}, daysOffRoast: 99 }), []);
     eq('diff: no parent → unknown, not "nothing changed"', Bw.variableDiff(null, d), Bw.UNKNOWN);
@@ -986,7 +988,7 @@ export function runTests(log = console) {
     eq('edit: quality must be a whole 1–10', [As.setField(a, 'quality10', 11).quality10, As.setField(a, 'quality10', 6.5).quality10, As.setField(a, 'quality10', 7).quality10], [null, null, 7]);
     eq('edit: pure — the input is untouched', fresh.hot.flavor, null);
 
-    eq('submit: blocked until the window is chosen', As.submitIssues(a), ['Window: under, in or over']);
+    eq('submit: blocked until the window is chosen', As.submitIssues(a), ['Window: under → over']);
     eq('submit: refused while incomplete (no submittedAt)', As.submit(a, 'T').submittedAt, null);
     a = As.setField(a, 'window', 'over');
     eq('submit: complete → stamped', As.submit(a, '2026-09-17T10:00:00Z').submittedAt, '2026-09-17T10:00:00Z');
@@ -1067,6 +1069,67 @@ export function runTests(log = console) {
     eq('nudge: nothing to back up → never', Xp.shouldNudge([], null, now), false);
 
     eq('quality anchors: words for 1 and 10', [As.QUALITY_ANCHORS[1], As.QUALITY_ANCHORS[10]], ['undrinkable, would pour it out', 'exceptional, the best cup I can make']);
+  }
+
+  // ================= 2026-09-18 improvements =================
+  {
+    // Five-point window
+    eq('window: five points, the old three still valid', As.WINDOWS, ['under', 'slightly-under', 'in', 'slightly-over', 'over']);
+    eq('window: which way to move next', As.WINDOWS.map(As.direction),
+      ['more extraction', 'more extraction', null, 'less extraction', 'less extraction']);
+    eq('window: a bad value is still refused', As.setField(As.createAssessment(), 'window', 'sideways').window, null);
+    const scored = t => ({ phases: { bloom: 5, drawdown: 70 }, drift: { phases: {} },
+      assessment: { ...As.createAssessment(), window: t, submittedAt: 'T' } });
+    eq('window: "slightly" cups can still be blamed on a phase', As.attributionOptions(scored('slightly-over')).map(o => o.phase), ['bloom', 'drawdown']);
+    eq('window: IN has nothing to attribute', As.attributionOptions(scored('in')), []);
+    eq('window: moving to IN clears a stale attribution, from "slightly" too',
+      As.setField({ ...As.createAssessment(), window: 'slightly-under', attributedPhase: 'bloom' }, 'window', 'in').attributedPhase, null);
+
+    // Why the brew was cut
+    const cut = { id: 'b', endedBy: 'cut' };
+    eq('cut reason: a chip and a note, kept separately', Bw.setCutReason(Bw.setCutReason(cut, { choice: 'bed stalled' }), { note: 'stalled at 2:10' }).cutReason,
+      { choice: 'bed stalled', note: 'stalled at 2:10' });
+    eq('cut reason: an unknown chip is refused', Bw.setCutReason(cut, { choice: 'because' }), cut);
+    eq('cut reason: setting a note keeps the chip', Bw.setCutReason({ ...cut, cutReason: { choice: 'mistake', note: '' } }, { note: 'wrong kettle' }).cutReason.choice, 'mistake');
+
+    // No comparison against a brew from before the setup screen existed
+    const legacy = { id: 'old', beanId: 'bean-guji', startedAt: '2026-09-17T09:00:00Z', doseG: 13, recipeId: 'r1' };
+    const modern = { ...legacy, id: 'new', startedAt: '2026-09-17T10:00:00Z', grind: { setting: 24, unit: 'clicks' }, preheat: { dripper: true, server: null } };
+    eq('legacy: a brew with no setup has nothing to compare', [Bw.hasSetup(legacy), Bw.hasSetup(modern)], [false, true]);
+    eq('legacy: diff against it is unknown, not "5 changes you made"', Bw.variableDiff(legacy, { grind: { setting: 24 } }), Bw.UNKNOWN);
+    const mixed = [{ id: 's', brews: [legacy, modern] }];
+    eq('legacy: clone-last skips it and copies the newest brew that has a setup',
+      [Bw.lastBrewOnBean(mixed, 'bean-guji').id, Bw.lastComparableOnBean(mixed, 'bean-guji').id], ['new', 'new']);
+    eq('legacy: with only legacy brews there is nothing to clone', Bw.lastComparableOnBean([{ id: 's', brews: [legacy] }], 'bean-guji'), null);
+    eq('legacy: a blank-slate brew on that bean starts clean, no phantom changes',
+      Bw.variableDiff(Bw.lastComparableOnBean([{ id: 's', brews: [legacy] }], 'bean-guji'), { grind: {} }), Bw.UNKNOWN);
+
+    // A cut must not make the phases it prevented look "short"
+    const yuan = yuanRecipe();
+    const cutEarly = T.analyzeBrew(yuan, [
+      { type: 'pour', atS: 0, volumeMl: 50, valve: 'closed' },
+      { type: 'pour-done', atS: 8 },
+      { type: 'cut', atS: 47 },
+    ]);
+    eq('cut: the brew ended in the steep', [cutEarly.endedBy, Object.keys(cutEarly.phases)], ['cut', ['steep']]);
+    // Cut at 0:47 with the valve never opened: the steep ran 7 s LONGER than planned, which is real.
+    eq('cut: a phase that overran before the cut is still flagged', cutEarly.drift.phases.steep.flag, 'long');
+    eq('cut: phases the cut prevented are exempt, not "short"',
+      ['percolation', 'drawdown'].map(p => [cutEarly.drift.phases[p].flag, cutEarly.drift.phases[p].exempt]), [[null, 'cut'], [null, 'cut']]);
+    // Your brew 6b06: cut at 0:47 inside a 65 s planned steep. Nothing there is an execution error.
+    const realCut = T.analyzeBrew(yuan, [
+      { type: 'pour', atS: 0, volumeMl: 50, valve: 'closed' }, { type: 'pour-done', atS: 7.58 }, { type: 'cut', atS: 30 }]);
+    eq('cut: the interrupted steep is exempt, not "short"', [realCut.drift.phases.steep.flag, realCut.drift.phases.steep.exempt], [null, 'cut']);
+    eq('cut: the total is still exempt', cutEarly.drift.total.exempt, 'cut');
+    const cutLate = T.analyzeBrew(yuan, [
+      { type: 'pour', atS: 0, volumeMl: 50, valve: 'closed' },
+      { type: 'valve', atS: 40, state: 'open', trigger: 'planned' },
+      { type: 'pour', atS: 45, volumeMl: 100 },
+      { type: 'pour', atS: 80, volumeMl: 60 },
+      { type: 'cut', atS: 200 },
+    ]);
+    eq('cut: a phase that ran LONG before the cut is still flagged', cutLate.drift.phases.drawdown.flag, 'long');
+    eq('cut: phases completed before the cut are still judged normally', cutLate.drift.phases.steep.flag, 'on');
   }
 
   // ---- model ----

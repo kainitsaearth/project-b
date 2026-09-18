@@ -45,10 +45,18 @@ function same(a, b) {
   return Object.is(a, b);
 }
 
+// Brews saved before the setup screen existed (before Step 8) carry no chosen variables at all.
+// Comparing against one turns missing data into "changes you made".
+export function hasSetup(brew) {
+  return isPlainObject(brew) && isPlainObject(brew.grind);
+}
+
 // What changed from the parent brew to the draft, as [{ field, label, from, to }] in display order.
-// No parent (blank slate, or the first brew on a bean) → UNKNOWN: "nothing changed" would be a lie.
+// No parent (blank slate, the first brew on a bean, or a brew from before setup existed) →
+// UNKNOWN: "nothing changed" would be a lie.
 export function variableDiff(parent, draft) {
   if (!isPlainObject(parent) || !isPlainObject(draft)) return UNKNOWN;
+  if (!hasSetup(parent)) return UNKNOWN;
   const a = flatten(variablesOf(parent));
   const b = flatten(variablesOf(draft));
   return ORDER.filter(f => !same(a[f], b[f]))
@@ -96,6 +104,12 @@ export function lastBrewOnBean(sessions, beanId) {
   return allBrews(sessions).find(b => b.beanId === beanId) ?? null;
 }
 
+// The newest brew on this bean that can actually be compared against (has a setup).
+export function lastComparableOnBean(sessions, beanId) {
+  if (!beanId) return null;
+  return allBrews(sessions).find(b => b.beanId === beanId && hasSetup(b)) ?? null;
+}
+
 // ---------- drafts ----------
 
 // A draft is what the setup screen edits before the coach starts:
@@ -117,7 +131,8 @@ export function blankDraft(recipe) {
 // beanId: the bean to clone for (defaults to the recipe's bean). No brew on it → a blank draft
 // for that bean, still in 'clone' mode so picking a bean with history clones from it.
 export function cloneDraft(recipe, sessions, beanId = recipe?.beanId ?? null) {
-  const parent = lastBrewOnBean(sessions, beanId);
+  // Clone the newest brew that has a setup to copy; older records have nothing to give.
+  const parent = lastComparableOnBean(sessions, beanId);
   if (!parent) return { ...blankDraft(recipe), mode: 'clone', beanId: beanId ?? null };
   return {
     mode: 'clone', changedFrom: parent.id,
@@ -179,6 +194,18 @@ export function reconcilePour(brew, pourIndex, key, value) {
     return n === pourIndex ? { ...e, [key]: value, reconciled: true } : e;
   });
   return withOutcomes({ ...brew, timeline });
+}
+
+// Why a brew was cut. Asked AFTER the brew — never mid-pour, when hands are busy.
+// A cut is a decision (spec §5.1.1); without the reason the record can't teach anything later.
+export const CUT_REASONS = Object.freeze(['bed stalled', 'smelled/tasted over', 'running late', 'mistake', 'other']);
+export function setCutReason(brew, { choice = null, note = null } = {}) {
+  if (choice !== null && !CUT_REASONS.includes(choice)) return brew;
+  const prev = brew.cutReason ?? { choice: null, note: '' };
+  return { ...brew, cutReason: {
+    choice: choice === null ? prev.choice : choice,
+    note: note === null ? (prev.note ?? '') : String(note),
+  } };
 }
 
 // Set a measured field (output, bypass, serve temp, notes) and recompute.
